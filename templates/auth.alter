@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "orm": "sqlmodel",
+  "dialect": "postgresql",
+  "tables": [
+    {
+      "name": "users",
+      "file_path": "app/models.py",
+      "position": {"x": 600, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "email", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 255, "foreign_key": null, "index": true},
+        {"name": "hashed_password", "type": "string", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": 255, "foreign_key": null, "index": false},
+        {"name": "email_verified", "type": "bool", "primary_key": false, "nullable": false, "default": "false", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "is_active", "type": "bool", "primary_key": false, "nullable": false, "default": "true", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "sessions",
+      "file_path": "app/models.py",
+      "position": {"x": 200, "y": 420},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "user_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "users.id", "index": false},
+        {"name": "token", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 512, "foreign_key": null, "index": true},
+        {"name": "user_agent", "type": "string", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": 512, "foreign_key": null, "index": false},
+        {"name": "ip_address", "type": "string", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": 45, "foreign_key": null, "index": false},
+        {"name": "expires_at", "type": "datetime", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "tokens",
+      "file_path": "app/models.py",
+      "position": {"x": 600, "y": 460},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "user_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "users.id", "index": false},
+        {"name": "type", "type": "TokenType", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "token", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 512, "foreign_key": null, "index": true},
+        {"name": "used_at", "type": "datetime", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "expires_at", "type": "datetime", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "oauth_accounts",
+      "file_path": "app/models.py",
+      "position": {"x": 1050, "y": 420},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "user_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "users.id", "index": false},
+        {"name": "provider", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 50, "foreign_key": null, "index": false},
+        {"name": "provider_account_id", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 255, "foreign_key": null, "index": true},
+        {"name": "access_token", "type": "text", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "refresh_token", "type": "text", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": [{"columns": ["provider", "provider_account_id"], "unique": true}]
+    }
+  ],
+  "relations": [
+    {"name": "sessions_user_id_fkey", "from_table": "sessions", "from_column": "user_id", "to_table": "users", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "tokens_user_id_fkey", "from_table": "tokens", "from_column": "user_id", "to_table": "users", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "oauth_accounts_user_id_fkey", "from_table": "oauth_accounts", "from_column": "user_id", "to_table": "users", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"}
+  ],
+  "enums": [
+    {"name": "TokenType", "values": ["email_verification", "password_reset", "api_key"]}
+  ],
+  "metadata": {
+    "sqlmodel_module": "app/models.py",
+    "alembic_dir": "alembic",
+    "database_url_env": "DATABASE_URL",
+    "created_at": null,
+    "last_synced": null
+  }
+}

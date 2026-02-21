@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en" translate="no">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="google" content="notranslate" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alter — ERD Canvas</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div id="app">
+
+    <!-- ── Toolbar ─────────────────────────────────────────────── -->
+    <header id="toolbar">
+      <div class="toolbar-left">
+        <span class="logo">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <polygon points="9,1 17,5.5 17,12.5 9,17 1,12.5 1,5.5" stroke="#7c5cbf" stroke-width="1.6" fill="none"/>
+            <polygon points="9,5 13,7.5 13,12 9,14 5,12 5,7.5" fill="#7c5cbf" opacity="0.4"/>
+          </svg>
+          Alter
+        </span>
+        <!-- Edit actions -->
+        <div class="tb-group">
+          <button class="tb-btn" id="btn-add-table"   title="Add table">+ Table</button>
+          <button class="tb-btn" id="btn-paste-sql"   title="Paste CREATE TABLE SQL (Ctrl+V)">Paste SQL</button>
+          <button class="tb-btn" id="btn-template"    title="Load a starter template">Templates</button>
+        </div>
+        <!-- Pending changes -->
+        <div class="tb-group" id="pending-group" hidden>
+          <span id="pending-badge"></span>
+          <button class="tb-btn tb-commit"  id="btn-commit"  title="Commit changes to disk">Commit</button>
+          <button class="tb-btn tb-discard" id="btn-discard" title="Discard all pending changes">Discard</button>
+        </div>
+        <!-- Code sync actions -->
+        <div class="tb-group" id="code-group">
+          <button class="tb-btn tb-apply-code" id="btn-apply-code" title="Write schema to model files (alter apply)">Apply to Code</button>
+          <button class="tb-btn tb-sync-code"  id="btn-sync-code"  title="Re-read model files into canvas (alter sync)">Sync from Code</button>
+          <button class="tb-btn tb-enums"      id="btn-enums"      title="Manage enum definitions">Enums</button>
+        </div>
+      </div>
+      <div class="toolbar-center" id="schema-name">schema.alter</div>
+      <div class="toolbar-right">
+        <span id="table-count" class="stat-badge"></span>
+        <button class="tb-btn" id="btn-sidebar" title="Migration SQL sidebar">SQL</button>
+        <div class="zoom-controls">
+          <button class="tb-btn" id="btn-zoom-fit"  title="Fit to screen (F)">⊡</button>
+          <button class="tb-btn" id="btn-zoom-out"  title="Zoom out (−)">−</button>
+          <button class="tb-btn" id="btn-zoom-in"   title="Zoom in (+)">+</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Smart awareness banner ──────────────────────────────── -->
+    <div id="awareness-banner" class="awareness-banner" hidden>
+      <span id="awareness-msg"></span>
+      <button class="awareness-dismiss" onclick="dismissAwareness()" title="Dismiss">✕</button>
+    </div>
+
+    <!-- ── Canvas area ─────────────────────────────────────────── -->
+    <main id="canvas-wrap">
+
+      <div id="canvas">
+        <!-- SVG for relation lines — same coordinate space as table cards -->
+        <svg id="canvas-svg" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <!--
+              Cardinality markers using context-stroke so they inherit
+              the path's current stroke colour automatically.
+              markerUnits="userSpaceOnUse" keeps sizes fixed (px) regardless
+              of stroke-width changes between default / highlighted states.
+            -->
+
+            <!-- ── Crow's foot at path START (many / FK table) ── -->
+            <!-- Fan opens AT entity (x=0), prongs converge into path (x=9) -->
+            <marker id="ms-many" markerUnits="userSpaceOnUse"
+                    markerWidth="14" markerHeight="12"
+                    refX="0" refY="6" orient="auto">
+              <!-- centre line -->
+              <line x1="0" y1="6"  x2="12" y2="6"  stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+              <!-- top prong: fan at entity edge, converges into path -->
+              <line x1="0" y1="2"  x2="9"  y2="6"  stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+              <!-- bottom prong -->
+              <line x1="0" y1="10" x2="9"  y2="6"  stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+              <!-- tick at entity end -->
+              <line x1="1" y1="2"  x2="1"  y2="10" stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+            </marker>
+
+            <!-- ── Single bar at path START (one / referenced table, start side) ── -->
+            <marker id="ms-one" markerUnits="userSpaceOnUse"
+                    markerWidth="6" markerHeight="12"
+                    refX="0" refY="6" orient="auto">
+              <line x1="0" y1="1" x2="0" y2="11" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round"/>
+            </marker>
+
+            <!-- ── Single bar at path END (one / referenced table, end side) ── -->
+            <marker id="me-one" markerUnits="userSpaceOnUse"
+                    markerWidth="6" markerHeight="12"
+                    refX="6" refY="6" orient="auto">
+              <line x1="6" y1="1" x2="6" y2="11" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round"/>
+            </marker>
+
+            <!-- ── Crow's foot at path END (many / FK table, end side) ── -->
+            <!-- Fan opens AT entity (x=12), prongs converge into path (x=3) -->
+            <marker id="me-many" markerUnits="userSpaceOnUse"
+                    markerWidth="14" markerHeight="12"
+                    refX="12" refY="6" orient="auto">
+              <!-- centre line -->
+              <line x1="12" y1="6"  x2="0"  y2="6"  stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+              <!-- top prong: fan at entity edge, converges into path -->
+              <line x1="12" y1="2"  x2="3"  y2="6"  stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+              <!-- bottom prong -->
+              <line x1="12" y1="10" x2="3"  y2="6"  stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+              <!-- tick at entity end -->
+              <line x1="11" y1="2"  x2="11" y2="10" stroke="context-stroke" stroke-width="1.3" stroke-linecap="round"/>
+            </marker>
+          </defs>
+        </svg>
+
+        <!-- Table cards injected by canvas.js -->
+      </div>
+
+      <!-- ── Minimap ────────────────────────────────────────────── -->
+      <div id="minimap" title="Click to navigate">
+        <canvas id="minimap-canvas" width="192" height="132"></canvas>
+      </div>
+
+      <!-- ── FK relation tooltip ───────────────────────────────── -->
+      <div id="rel-tooltip" hidden></div>
+
+      <!-- ── Empty state ───────────────────────────────────────── -->
+      <div id="empty-state" hidden>
+        <div class="empty-icon">⬡</div>
+        <p>No tables yet.</p>
+        <p class="empty-sub">Click <strong>+ Table</strong> to add one, or <strong>Paste SQL</strong> to import.</p>
+      </div>
+
+    </main>
+
+    <!-- ── SQL Sidebar ────────────────────────────────────────────── -->
+    <aside id="sidebar" class="sidebar-closed">
+      <div class="sidebar-header">
+        <div class="sidebar-tabs">
+          <button class="sidebar-tab sidebar-tab-active" id="tab-schema">Schema</button>
+          <button class="sidebar-tab" id="tab-migration">Migration</button>
+        </div>
+        <button class="tb-btn" id="btn-sidebar-close" title="Close sidebar">✕</button>
+      </div>
+
+      <!-- Schema tab panel -->
+      <div class="sidebar-body" id="panel-schema">
+        <pre id="sidebar-schema-sql"></pre>
+        <button class="tb-btn sidebar-copy" id="btn-copy-schema-sql" title="Copy to clipboard">Copy</button>
+      </div>
+
+      <!-- Migration tab panel -->
+      <div class="sidebar-body" id="panel-migration" hidden>
+        <div id="sidebar-empty" class="sidebar-empty-state">No pending changes</div>
+        <pre id="sidebar-sql" hidden></pre>
+        <button class="tb-btn sidebar-copy" id="btn-copy-sql" hidden title="Copy to clipboard">Copy</button>
+      </div>
+    </aside>
+
+  </div><!-- #app -->
+
+  <!-- ── Toast notifications ─────────────────────────────────────── -->
+  <div id="toast-stack" role="region" aria-label="Notifications"></div>
+
+  <!-- ── Modals ──────────────────────────────────────────────────── -->
+
+  <!-- Add Table modal -->
+  <div id="modal-add-table" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div class="modal-title">New Table</div>
+      <label class="modal-label">Table name
+        <input class="modal-input" id="input-table-name" type="text" placeholder="e.g. orders" autocomplete="off" />
+      </label>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-add-table-cancel">Cancel</button>
+        <button class="tb-btn tb-commit"    id="btn-add-table-ok">Add Table</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Paste SQL modal -->
+  <div id="modal-paste-sql" class="modal-backdrop" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-title">Paste SQL</div>
+      <label class="modal-label">CREATE TABLE statements
+        <textarea class="modal-input modal-textarea" id="input-paste-sql"
+                  placeholder="CREATE TABLE orders (&#10;  id uuid PRIMARY KEY,&#10;  ...&#10;);"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-paste-sql-cancel">Cancel</button>
+        <button class="tb-btn tb-commit"    id="btn-paste-sql-ok">Import</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Template picker modal -->
+  <div id="modal-template" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div class="modal-title">Starter Templates</div>
+      <div id="template-list" class="template-list"></div>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-template-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Column modal -->
+  <div id="modal-add-col" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div class="modal-title">Add Column — <span id="modal-add-col-table"></span></div>
+      <label class="modal-label">Name
+        <input class="modal-input" id="input-col-name" type="text" placeholder="e.g. email" autocomplete="off" />
+      </label>
+      <label class="modal-label">Type
+        <select class="modal-input" id="input-col-type"></select>
+      </label>
+      <label class="modal-label modal-checkbox" id="label-col-pk">
+        <input type="checkbox" id="input-col-pk" /> Primary Key
+      </label>
+      <label class="modal-label modal-checkbox" id="label-col-nullable">
+        <input type="checkbox" id="input-col-nullable" checked /> Nullable
+      </label>
+      <label class="modal-label modal-checkbox">
+        <input type="checkbox" id="input-col-unique" /> Unique
+      </label>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-add-col-cancel">Cancel</button>
+        <button class="tb-btn tb-commit"    id="btn-add-col-ok">Add Column</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Column modal -->
+  <div id="modal-edit-col" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div class="modal-title">Edit Column — <span id="modal-edit-col-label"></span></div>
+      <label class="modal-label">Name
+        <input class="modal-input" id="input-edit-col-name" type="text" autocomplete="off" />
+      </label>
+      <label class="modal-label">Type
+        <select class="modal-input" id="input-edit-col-type"></select>
+      </label>
+      <label class="modal-label modal-checkbox">
+        <input type="checkbox" id="input-edit-col-nullable" /> Nullable
+      </label>
+      <label class="modal-label modal-checkbox">
+        <input type="checkbox" id="input-edit-col-unique" /> Unique
+      </label>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-edit-col-cancel">Cancel</button>
+        <button class="tb-btn tb-commit"    id="btn-edit-col-ok">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Foreign Key modal -->
+  <div id="modal-add-fk" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div class="modal-title">Add Foreign Key — <span id="modal-fk-table"></span></div>
+      <label class="modal-label">Column
+        <select class="modal-input" id="input-fk-col"></select>
+      </label>
+      <label class="modal-label">References table
+        <select class="modal-input" id="input-fk-to-table"></select>
+      </label>
+      <label class="modal-label">References column
+        <select class="modal-input" id="input-fk-to-col"></select>
+      </label>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-add-fk-cancel">Cancel</button>
+        <button class="tb-btn tb-commit"    id="btn-add-fk-ok">Add FK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enum list modal -->
+  <div id="modal-enum-list" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div class="modal-title">Enum Definitions</div>
+      <div id="enum-list" class="enum-list"></div>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-enum-list-close">Close</button>
+        <button class="tb-btn tb-commit"    id="btn-enum-new">+ New Enum</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enum edit modal (create & update) -->
+  <div id="modal-enum-edit" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div class="modal-title" id="modal-enum-edit-title">New Enum</div>
+      <label class="modal-label">Name
+        <input class="modal-input" id="input-enum-name" type="text" placeholder="e.g. Status" autocomplete="off" />
+      </label>
+      <label class="modal-label">Values <span class="modal-label-hint">(one per line)</span>
+        <textarea class="modal-input modal-textarea modal-textarea-sm" id="input-enum-values"
+                  placeholder="active&#10;inactive&#10;pending"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button class="tb-btn modal-cancel" id="btn-enum-edit-cancel">Cancel</button>
+        <button class="tb-btn ctx-danger tb-btn-danger" id="btn-enum-edit-delete" hidden>Delete</button>
+        <button class="tb-btn tb-commit"                id="btn-enum-edit-ok">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context menu -->
+  <div id="ctx-menu" class="ctx-menu" hidden>
+    <!-- Table-level items -->
+    <button class="ctx-item" id="ctx-add-col">Add column…</button>
+    <button class="ctx-item" id="ctx-add-fk">Add foreign key…</button>
+    <button class="ctx-item ctx-danger" id="ctx-drop-table">Remove table</button>
+    <!-- Column-level items (shown only when right-clicking a column row) -->
+    <div class="ctx-sep" id="ctx-col-sep" hidden></div>
+    <button class="ctx-item" id="ctx-edit-col" hidden>Edit column…</button>
+    <button class="ctx-item ctx-danger" id="ctx-drop-col" hidden>Remove column</button>
+  </div>
+
+  <!-- CDN libraries — pinned versions, no npm -->
+  <script src="https://cdn.jsdelivr.net/npm/elkjs@0.11.0/lib/elk.bundled.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/panzoom@9.4.3/dist/panzoom.min.js"></script>
+  <script src="canvas.js"></script>
+</body>
+</html>

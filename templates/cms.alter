@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "orm": "sqlmodel",
+  "dialect": "postgresql",
+  "tables": [
+    {
+      "name": "users",
+      "file_path": "app/models.py",
+      "position": {"x": 80, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "email", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 255, "foreign_key": null, "index": true},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 200, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "categories",
+      "file_path": "app/models.py",
+      "position": {"x": 80, "y": 420},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 100, "foreign_key": null, "index": false},
+        {"name": "slug", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 100, "foreign_key": null, "index": true},
+        {"name": "description", "type": "text", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "parent_id", "type": "uuid", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": "categories.id", "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "posts",
+      "file_path": "app/models.py",
+      "position": {"x": 560, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "title", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 500, "foreign_key": null, "index": true},
+        {"name": "slug", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 500, "foreign_key": null, "index": true},
+        {"name": "body", "type": "text", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "excerpt", "type": "text", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "status", "type": "PostStatus", "primary_key": false, "nullable": false, "default": "draft", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "author_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "users.id", "index": false},
+        {"name": "category_id", "type": "uuid", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": "categories.id", "index": false},
+        {"name": "published_at", "type": "datetime", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "updated_at", "type": "datetime", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "tags",
+      "file_path": "app/models.py",
+      "position": {"x": 1060, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 100, "foreign_key": null, "index": true},
+        {"name": "slug", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 100, "foreign_key": null, "index": true}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "post_tags",
+      "file_path": "app/models.py",
+      "position": {"x": 840, "y": 420},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "post_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "posts.id", "index": false},
+        {"name": "tag_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "tags.id", "index": false}
+      ],
+      "indexes": [{"columns": ["post_id", "tag_id"], "unique": true}]
+    },
+    {
+      "name": "media",
+      "file_path": "app/models.py",
+      "position": {"x": 1060, "y": 420},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "filename", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 255, "foreign_key": null, "index": false},
+        {"name": "url", "type": "text", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "mime_type", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 100, "foreign_key": null, "index": false},
+        {"name": "size_bytes", "type": "int", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "uploaded_by", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "users.id", "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    }
+  ],
+  "relations": [
+    {"name": "posts_author_id_fkey", "from_table": "posts", "from_column": "author_id", "to_table": "users", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "posts_category_id_fkey", "from_table": "posts", "from_column": "category_id", "to_table": "categories", "to_column": "id", "type": "many-to-one", "on_delete": "SET NULL"},
+    {"name": "categories_parent_id_fkey", "from_table": "categories", "from_column": "parent_id", "to_table": "categories", "to_column": "id", "type": "many-to-one", "on_delete": "SET NULL"},
+    {"name": "post_tags_post_id_fkey", "from_table": "post_tags", "from_column": "post_id", "to_table": "posts", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "post_tags_tag_id_fkey", "from_table": "post_tags", "from_column": "tag_id", "to_table": "tags", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "media_uploaded_by_fkey", "from_table": "media", "from_column": "uploaded_by", "to_table": "users", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"}
+  ],
+  "enums": [
+    {"name": "PostStatus", "values": ["draft", "published", "archived"]}
+  ],
+  "metadata": {
+    "sqlmodel_module": "app/models.py",
+    "alembic_dir": "alembic",
+    "database_url_env": "DATABASE_URL",
+    "created_at": null,
+    "last_synced": null
+  }
+}

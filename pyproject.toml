@@ -1,0 +1,78 @@
+[project]
+name = "alterdb"
+version = "0.1.0"
+description = "Visual schema design for SQLModel and SQLAlchemy. Edit your database as a diagram, write it back as code."
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Chimi Labs" },
+    { name = "Franco Mahl", email = "francomahl@gmail.com" },
+]
+readme = "README.md"
+keywords = [
+    "database",
+    "schema",
+    "orm",
+    "sqlmodel",
+    "sqlalchemy",
+    "canvas",
+    "mcp",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Code Generators",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "click>=8.0",
+    "mcp>=1.0",
+    "sqlalchemy>=2.0",
+    "sqlparse>=0.5",
+    "watchfiles>=0.20",
+]
+
+[project.optional-dependencies]
+db = ["psycopg2-binary>=2.9"]
+
+[project.urls]
+Homepage = "https://github.com/chimi-labs/alter"
+Repository = "https://github.com/chimi-labs/alter"
+Issues = "https://github.com/chimi-labs/alter/issues"
+
+[project.scripts]
+alter = "alter.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: requires docker compose up -d (Postgres on port 5433)"]
+
+[tool.mypy]
+strict = true
+packages = ["alter"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.8",
+    "ruff>=0.4",
+    "sqlmodel>=0.0.20",
+]
