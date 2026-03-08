@@ -409,29 +409,22 @@ involved in a merge or rebase. No further action needed.
 
 ## MCP Server
 
-Alter exposes your schema to any MCP-compatible AI assistant (Claude, Cursor, Windsurf, etc.)
-so it can read, modify, and commit schema changes programmatically.
+Alter exposes your schema to any MCP-compatible AI assistant (Claude Code, Cursor, Windsurf, etc.)
+so it can read, modify, and commit schema changes programmatically — all through natural language.
+
+### Setup
+
+**Step 1 — Initialize the schema file** (if you haven't already):
 
 ```bash
-alter mcp   # starts the MCP server over stdio
+alter init    # scan your ORM models → create schema.alter
 ```
 
-### What AI assistants can do through MCP
+The MCP server requires `schema.alter` to exist before it can start.
 
-- **Read** your current schema (tables, columns, relations, enums)
-- **Propose changes** — add/remove/rename tables and columns in a staging area
-- **Add a file** — parse a model file and merge its tables into the schema (`add_file` tool)
-- **Preview diffs** before committing anything
-- **Preview migration SQL** — see the DDL that needs to run for pending changes
-- **Undo/redo** any staged change
-- **Commit** approved changes to `schema.alter`
-- **Export** as SQL, Mermaid, or JSON
-- **Validate** the schema for errors
+**Step 2 — Register the server in your editor.**
 
-### Configure in your editor
-
-Add the following to your editor's MCP config (`claude_desktop_config.json` for Claude Desktop,
-`.cursor/mcp.json` for Cursor):
+Most editors use the same JSON config. Add this to your MCP settings file:
 
 ```json
 {
@@ -444,34 +437,68 @@ Add the following to your editor's MCP config (`claude_desktop_config.json` for 
 }
 ```
 
-Replace `/path/to/project` with the absolute path to your project directory (where `schema.alter`
-lives or will be created).
+Replace `/path/to/project` with the absolute path to your project root.
 
-Then ask your AI assistant to work with your schema using natural language:
+| Editor | Config file |
+| --- | --- |
+| Claude Desktop | `claude_desktop_config.json` |
+| Cursor | `.cursor/mcp.json` |
+| Windsurf | `.windsurf/mcp.json` |
 
-**Exploring the schema:**
+For **Claude Code**, you can also register via the CLI instead of editing JSON:
+
+```bash
+claude mcp add alter -- uv run --directory /path/to/project alter mcp
+```
+
+> **Why `uv run`?** It ensures the command runs inside your project's virtual environment,
+> picking up the correct `alterdb` version and dependencies — no manual `source .venv/bin/activate` needed.
+
+**Step 3 — Restart your editor** (or open a new session) so the MCP server connects. Verify by asking:
+
+> _"What tools do you have available from alter?"_
+
+### What AI assistants can do through MCP
+
+- **Read** your current schema (tables, columns, relations, enums)
+- **Propose changes** — add/remove/rename tables and columns in a staging area
+- **Add a file** — parse a model file and merge its tables into the schema
+- **Preview diffs** before committing anything
+- **Preview migration SQL** — see the DDL that needs to run for pending changes
+- **Undo/redo** any staged change
+- **Commit** approved changes to `schema.alter`
+- **Export** as SQL, Mermaid, or JSON
+- **Validate** the schema for errors
+
+### Example prompts
+
+Once connected, just talk to your assistant:
+
+**Explore and understand:**
 - _"Show me the current schema"_
 - _"What tables reference the users table?"_
+- _"How many columns does the orders table have? List them with their types"_
 - _"Export the schema as a Mermaid diagram I can paste into our wiki"_
 
-**Making changes:**
+**Design and modify:**
 - _"Add a `payments` table with `id`, `amount`, `currency`, and a foreign key to `users`"_
 - _"Add a `tags` table and a many-to-many join table linking it to `posts`"_
 - _"Rename the `name` column in `users` to `full_name`"_
+- _"Add `created_at` and `updated_at` timestamp columns to every table"_
+- _"Remove the `legacy_notes` column from `orders`"_
 
-**Reviewing before applying:**
+**Review and validate:**
 - _"Show me the diff of what changed"_
 - _"Preview the migration SQL for the pending changes"_
 - _"Validate the schema — are there any broken foreign keys?"_
+- _"Undo the last change"_
 
-The assistant will stage changes, show you a diff, and only commit to `schema.alter` with your approval — nothing is written to your model files until you also run `alter apply`.
+**Import and bootstrap:**
+- _"Parse `app/legacy/models.py` and add its tables to the schema"_
+- _"I have a SQL dump — import it into the schema"_
 
-### Step-by-step setup guides
-
-Need a full walkthrough? These guides cover prerequisites, configuration, and verification for each editor:
-
-- [**Claude Code setup guide**](docs/mcp-claude-code-setup.md)
-- [**Cursor setup guide**](docs/mcp-cursor-setup.md)
+The assistant stages changes, shows you a diff, and only commits to `schema.alter` with your
+approval — nothing is written to your model files until you also run `alter apply`.
 
 ## Supported ORMs
 
