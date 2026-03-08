@@ -430,20 +430,8 @@ alter mcp   # starts the MCP server over stdio
 
 ### Configure in your editor
 
-**Claude Desktop** (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "alter": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/project", "alter", "mcp"]
-    }
-  }
-}
-```
-
-**Cursor** (`.cursor/mcp.json`):
+Add the following to your editor's MCP config (`claude_desktop_config.json` for Claude Desktop,
+`.cursor/mcp.json` for Cursor):
 
 ```json
 {
@@ -459,8 +447,31 @@ alter mcp   # starts the MCP server over stdio
 Replace `/path/to/project` with the absolute path to your project directory (where `schema.alter`
 lives or will be created).
 
-Then ask your AI assistant: _"Add a `payments` table with `id`, `amount`, `currency`, and a
-foreign key to `users`"_ — it will stage the change, show you the diff, and commit on your approval.
+Then ask your AI assistant to work with your schema using natural language:
+
+**Exploring the schema:**
+- _"Show me the current schema"_
+- _"What tables reference the users table?"_
+- _"Export the schema as a Mermaid diagram I can paste into our wiki"_
+
+**Making changes:**
+- _"Add a `payments` table with `id`, `amount`, `currency`, and a foreign key to `users`"_
+- _"Add a `tags` table and a many-to-many join table linking it to `posts`"_
+- _"Rename the `name` column in `users` to `full_name`"_
+
+**Reviewing before applying:**
+- _"Show me the diff of what changed"_
+- _"Preview the migration SQL for the pending changes"_
+- _"Validate the schema — are there any broken foreign keys?"_
+
+The assistant will stage changes, show you a diff, and only commit to `schema.alter` with your approval — nothing is written to your model files until you also run `alter apply`.
+
+### Step-by-step setup guides
+
+Need a full walkthrough? These guides cover prerequisites, configuration, and verification for each editor:
+
+- [**Claude Code setup guide**](docs/mcp-claude-code-setup.md)
+- [**Cursor setup guide**](docs/mcp-cursor-setup.md)
 
 ## Supported ORMs
 
