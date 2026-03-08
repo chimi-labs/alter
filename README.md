@@ -4,7 +4,7 @@
 
 Visual schema design for SQLModel and SQLAlchemy. Edit your database as a diagram, write it back as code.
 
-![Canvas](docs/Canvas.png)
+![Canvas](https://raw.githubusercontent.com/chimi-labs/alter/main/docs/Canvas.png)
 
 ## What is Alter?
 
