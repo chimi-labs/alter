@@ -40,7 +40,7 @@ from typing import Any, Callable
 from alter.diff import SchemaChange, diff_schemas
 from alter.exporters.sql import export_sql
 from alter.importers.sql import import_sql
-from alter.mcp_server import _apply_to_code_impl, _sync_from_code_impl
+
 from alter.schema import AlterSchema, Column, Relation, Table
 from alter.staging import StagingManager
 
@@ -591,6 +591,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_apply_to_code(self, body: bytes) -> None:
         """Write committed schema to ORM model files (alter apply)."""
         try:
+            from alter.mcp_server import _apply_to_code_impl
             preview = False
             if body:
                 data = json.loads(body)
@@ -605,6 +606,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_sync_from_code(self, body: bytes) -> None:
         """Re-parse model files and update schema.alter (alter sync)."""
         try:
+            from alter.mcp_server import _sync_from_code_impl
             # Mark as server-initiated so the file watcher doesn't re-broadcast.
             self.server._last_self_write = time.monotonic()
             _sync_from_code_impl(
