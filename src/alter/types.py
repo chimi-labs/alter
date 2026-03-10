@@ -69,6 +69,8 @@ _PYTHON_ALIASES: dict[str, str] = {
     "float":             "float",
     "bool":              "bool",
     "dict":              "json",
+    "list":              "json",
+    "List":              "json",
     "bytes":             "bytes",
     "Decimal":           "decimal",
     "datetime":          "datetime",

@@ -94,10 +94,18 @@ def _mapped_column_args(col: Column, enum_names: set[str]) -> str:
         args.append("nullable=False")
 
     # default
-    if col.default == "uuid4":
+    if col.default and col.default.startswith("expr:"):
+        args.append(f"default={col.default[5:]}")
+    elif col.default == "uuid4":
         args.append("default=uuid.uuid4")
-    elif col.default in ("utcnow", "now"):
+    elif col.default == "utcnow":
         args.append("default=datetime.utcnow")
+    elif col.default == "now":
+        args.append("default=datetime.now")
+    elif col.default == "{}":
+        args.append("default=dict")
+    elif col.default == "[]":
+        args.append("default=list")
     elif col.default is not None:
         raw = col.default
         if raw == "true":
@@ -111,6 +119,11 @@ def _mapped_column_args(col: Column, enum_names: set[str]) -> str:
         else:
             args.append(f'default="{raw}"')
 
+    # Passthrough kwargs
+    if col.extra_kwargs:
+        for k, v in col.extra_kwargs.items():
+            args.append(f"{k}={v}")
+
     return ", ".join(args)
 
 
@@ -122,9 +135,16 @@ def _column_line(col: Column, enum_names: set[str]) -> str:
 
 
 def _enum_class_source(enum: EnumDef) -> str:
+    import keyword
+    from alter.schema import EnumMember
     lines = [f"class {enum.name}(str, Enum):"]
     for v in enum.values:
-        lines.append(f'    {v} = "{v}"')
+        if isinstance(v, EnumMember):
+            mname = f"{v.member_name}_" if keyword.iskeyword(v.member_name) else v.member_name
+            lines.append(f'    {mname} = "{v.value}"')
+        else:
+            mname = f"{v}_" if keyword.iskeyword(v) else v
+            lines.append(f'    {mname} = "{v}"')
     return "\n".join(lines)
 
 
@@ -417,10 +437,16 @@ class SQLAlchemyGenerator(BaseGenerator):
                 replacements.append((start, end, patched))
             else:
                 # Enum class: surgical update preserves docstrings / comments
-                schema_value_lines = [
-                    f'    {v} = "{v}"'
-                    for v in enum_by_class[cls_name].values
-                ]
+                import keyword
+                from alter.schema import EnumMember
+                schema_value_lines = []
+                for v in enum_by_class[cls_name].values:
+                    if isinstance(v, EnumMember):
+                        mname = f"{v.member_name}_" if keyword.iskeyword(v.member_name) else v.member_name
+                        schema_value_lines.append(f'    {mname} = "{v.value}"')
+                    else:
+                        mname = f"{v}_" if keyword.iskeyword(v) else v
+                        schema_value_lines.append(f'    {mname} = "{v}"')
                 class_source = "".join(lines[start - 1 : end])
                 patched = surgical_update_enum_class(class_source, schema_value_lines)
                 if patched is None:

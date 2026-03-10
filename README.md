@@ -39,6 +39,16 @@ uv add alterdb
 
 **Requirements:** Python 3.11+
 
+> **Dependency conflicts?** If `alterdb` clashes with packages already in your project, install it
+> as an isolated CLI tool instead:
+>
+> ```bash
+> uv tool install alterdb
+> ```
+>
+> This keeps Alter's dependencies completely separate from your project's virtual environment while
+> making the `alter` command available on your `PATH`.
+
 > **Live database introspection** (MCP `introspect_db` tool): requires `psycopg2-binary`, install with `pip install alterdb[db]`.
 
 ## Quick Start

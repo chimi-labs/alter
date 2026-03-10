@@ -52,11 +52,20 @@ def _field_args(col: Column, enum_names: set[str]) -> str:
         args.append("primary_key=True")
 
     # default / default_factory
-    if col.default == "uuid4":
+    if col.default and col.default.startswith("expr:"):
+        # Verbatim expression preserved from source (e.g. lambda)
+        args.append(f"default_factory={col.default[5:]}")
+    elif col.default == "uuid4":
         args.append("default_factory=uuid.uuid4")
-    elif col.default in ("utcnow", "now"):
+    elif col.default == "utcnow":
         args.append("default_factory=datetime.utcnow")
+    elif col.default == "now":
+        args.append("default_factory=datetime.now")
     elif col.default == "list":
+        args.append("default_factory=list")
+    elif col.default == "{}":
+        args.append("default_factory=dict")
+    elif col.default == "[]":
         args.append("default_factory=list")
     elif col.default is not None:
         raw = col.default
@@ -83,6 +92,11 @@ def _field_args(col: Column, enum_names: set[str]) -> str:
     if col.max_length is not None:
         args.append(f"max_length={col.max_length}")
 
+    # Passthrough kwargs (sa_column, regex, ge, le, etc.)
+    if col.extra_kwargs:
+        for k, v in col.extra_kwargs.items():
+            args.append(f"{k}={v}")
+
     return ", ".join(args)
 
 
@@ -93,21 +107,27 @@ def _column_line(col: Column, enum_names: set[str]) -> str:
     return f"    {col.name}: {type_hint} = Field({field_str})"
 
 
-def _enum_member_name(value: str) -> str:
-    """Return a safe Python identifier for an enum member with the given value.
+def _safe_member_name(name: str) -> str:
+    """Return a safe Python identifier for an enum member name.
 
-    If *value* is a Python keyword (e.g. ``"import"``, ``"class"``), a
+    If *name* is a Python keyword (e.g. ``"import"``, ``"class"``), a
     trailing underscore is appended to avoid a ``SyntaxError``.
     """
-    return f"{value}_" if keyword.iskeyword(value) else value
+    return f"{name}_" if keyword.iskeyword(name) else name
 
 
 def _enum_class_source(enum: EnumDef) -> str:
     """Return source for a ``class X(str, Enum):`` definition."""
+    from alter.schema import EnumMember
     lines = [f"class {enum.name}(str, Enum):"]
     for v in enum.values:
-        member_name = _enum_member_name(v)
-        lines.append(f'    {member_name} = "{v}"')
+        if isinstance(v, EnumMember):
+            mname = _safe_member_name(v.member_name)
+            lines.append(f'    {mname} = "{v.value}"')
+        else:
+            # Legacy plain-string fallback
+            mname = _safe_member_name(v)
+            lines.append(f'    {mname} = "{v}"')
     return "\n".join(lines)
 
 
@@ -395,10 +415,15 @@ class SQLModelGenerator(BaseGenerator):
                 replacements.append((start, end, patched))
             else:
                 # Enum class: surgical update preserves docstrings / comments
-                schema_value_lines = [
-                    f'    {_enum_member_name(v)} = "{v}"'
-                    for v in enum_by_class[cls_name].values
-                ]
+                from alter.schema import EnumMember
+                schema_value_lines = []
+                for v in enum_by_class[cls_name].values:
+                    if isinstance(v, EnumMember):
+                        mname = _safe_member_name(v.member_name)
+                        schema_value_lines.append(f'    {mname} = "{v.value}"')
+                    else:
+                        mname = _safe_member_name(v)
+                        schema_value_lines.append(f'    {mname} = "{v}"')
                 class_source = "".join(lines[start - 1 : end])
                 patched = surgical_update_enum_class(class_source, schema_value_lines)
                 if patched is None:

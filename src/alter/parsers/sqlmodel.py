@@ -398,19 +398,21 @@ def _is_sqlmodel_base_class(node: ast.ClassDef) -> bool:
 
 
 def _parse_enum_class(node: ast.ClassDef, file_path: str | None = None) -> EnumDef:
-    """Extract enum name, member values, and optional file_path."""
-    values: list[str] = []
+    """Extract enum name, member names, and values."""
+    from alter.schema import EnumMember
+    values: list[EnumMember] = []
     for stmt in node.body:
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 if isinstance(target, ast.Name):
+                    member_name = target.id
                     if isinstance(stmt.value, ast.Constant) and isinstance(
                         stmt.value.value, str
                     ):
-                        values.append(stmt.value.value)
+                        values.append(EnumMember(member_name=member_name, value=stmt.value.value))
                     else:
-                        # Use the member name as fallback
-                        values.append(target.id)
+                        # Use the member name as both name and value
+                        values.append(EnumMember(member_name=member_name, value=member_name))
     return EnumDef(name=node.name, values=values, file_path=file_path)
 
 
@@ -693,6 +695,7 @@ def _parse_field_call(
     max_length: int | None = None
     foreign_key: str | None = None
     default: str | None = None
+    extra_kwargs: dict[str, str] = {}
 
     if value is not None and isinstance(value, ast.Call):
         func = value.func
@@ -724,7 +727,7 @@ def _parse_field_call(
                 elif arg == "foreign_key":
                     v = _const_value(kw_val)
                     if isinstance(v, str):
-                        foreign_key = v
+                        foreign_key = _strip_schema_prefix(v)
 
                 elif arg == "nullable":
                     v = _const_bool(kw_val)
@@ -739,10 +742,16 @@ def _parse_field_call(
                 elif arg == "default_factory":
                     default = _extract_default_factory(kw_val)
 
-                elif arg in ("sa_column", "sa_type", "description", "title",
-                             "alias", "ge", "le", "gt", "lt", "regex",
-                             "min_length", "schema_extra"):
-                    pass  # Known but not mapped to .alter schema
+                elif arg in ("sa_column", "sa_type", "ge", "le", "gt", "lt",
+                             "regex", "min_length"):
+                    # Preserve as passthrough — re-emitted verbatim by the generator
+                    try:
+                        extra_kwargs[arg] = ast.unparse(kw_val)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                elif arg in ("description", "title", "alias", "schema_extra"):
+                    pass  # Metadata-only kwargs — not needed for round-trip
 
                 else:
                     warns.append(
@@ -759,6 +768,7 @@ def _parse_field_call(
         max_length=max_length,
         foreign_key=foreign_key,
         default=default,
+        extra_kwargs=extra_kwargs or None,
     )
     return col, warns
 
@@ -786,21 +796,32 @@ def _extract_default(node: ast.expr) -> tuple[str | None, bool]:
         if val == "None":
             return None, True
         return val.lower(), False
+    # Dict literal: default={} or default={"key": "val"}
+    if isinstance(node, ast.Dict):
+        return "{}", False
+    # List literal: default=[] or default=[1, 2]
+    if isinstance(node, ast.List):
+        return "[]", False
     return None, False
 
 
 def _extract_default_factory(node: ast.expr) -> str | None:
-    """Extract the default_factory callable name.
+    """Extract the default_factory callable name or expression.
 
     * ``uuid.uuid4`` → ``"uuid4"``
     * ``datetime.utcnow`` → ``"utcnow"``
     * ``list`` → ``"list"``
+    * ``lambda: str(uuid.uuid4())`` → ``"expr:lambda: str(uuid.uuid4())"``
     """
     if isinstance(node, ast.Attribute):
         return node.attr
     if isinstance(node, ast.Name):
         return node.id
-    return None
+    # Lambda or other complex callable — preserve the expression verbatim
+    try:
+        return f"expr:{ast.unparse(node)}"
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _const_value(node: ast.expr) -> Any:
@@ -818,14 +839,28 @@ def _const_bool(node: ast.expr) -> bool | None:
     return None
 
 
+def _strip_schema_prefix(fk: str) -> str:
+    """Normalise a foreign-key string to ``"table.column"``.
+
+    Handles both ``"table.column"`` (returned as-is) and
+    ``"schema.table.column"`` (schema prefix stripped).
+    """
+    parts = fk.split(".")
+    if len(parts) == 3:
+        # schema.table.column → table.column
+        return f"{parts[1]}.{parts[2]}"
+    return fk
+
+
 def _make_relation(table_name: str, col: Column) -> Relation | None:
     """Build a Relation from a foreign_key column.
 
-    ``col.foreign_key`` is expected to be ``"to_table.to_column"``.
+    ``col.foreign_key`` is expected to be ``"to_table.to_column"``
+    (schema prefix, if any, must already be stripped).
     """
     if not col.foreign_key:
         return None
-    parts = col.foreign_key.split(".", 1)
+    parts = col.foreign_key.rsplit(".", 1)
     if len(parts) != 2:
         return None
     to_table, to_column = parts

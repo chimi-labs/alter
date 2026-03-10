@@ -229,6 +229,47 @@ def test_legacy_column_foreignkey() -> None:
     assert fk_rel.to_column == "id"
 
 
+def test_schema_qualified_foreign_key_relation() -> None:
+    """Schema-qualified FK like 'schema.table.column' should resolve correctly."""
+    source = """
+        from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+        from sqlalchemy import ForeignKey
+
+        class Base(DeclarativeBase):
+            pass
+
+        class Session(Base):
+            __tablename__ = "sessions"
+            id: Mapped[int] = mapped_column(primary_key=True)
+            user_id: Mapped[int] = mapped_column(ForeignKey("alpha_ai.users.id"))
+    """
+    result = parse_source_full(source)
+    rels = [r for r in result.relations if r.from_table == "sessions"]
+    assert len(rels) == 1
+    assert rels[0].to_table == "users"
+    assert rels[0].to_column == "id"
+
+
+def test_schema_qualified_foreign_key_column_stripped() -> None:
+    """Column.foreign_key should store 'table.column', not 'schema.table.column'."""
+    source = """
+        from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+        from sqlalchemy import ForeignKey
+
+        class Base(DeclarativeBase):
+            pass
+
+        class Session(Base):
+            __tablename__ = "sessions"
+            id: Mapped[int] = mapped_column(primary_key=True)
+            user_id: Mapped[int] = mapped_column(ForeignKey("alpha_ai.users.id"))
+    """
+    tables = parse_source(source)
+    session = next(t for t in tables if t.name == "sessions")
+    col = next(c for c in session.columns if c.name == "user_id")
+    assert col.foreign_key == "users.id"
+
+
 def test_legacy_column_unique() -> None:
     parser = SQLAlchemyParser()
     tables = parser.parse_file(FIXTURE)
@@ -367,3 +408,57 @@ def test_parse_directory_skips_syntax_errors(tmp_path: Path) -> None:
     result = parser.parse_directory(tmp_path)
     assert len(result.skipped_files) == 1
     assert len(result.schema.tables) == 1
+
+
+# ---------------------------------------------------------------------------
+# Round-trip fidelity regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_bug4_dict_literal_default_preserved() -> None:
+    """default={} should not be dropped in SQLAlchemy parser."""
+    source = """
+        from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+        from sqlalchemy import JSON
+
+        class Base(DeclarativeBase):
+            pass
+
+        class Config(Base):
+            __tablename__ = "configs"
+            id: Mapped[int] = mapped_column(primary_key=True)
+            data: Mapped[dict] = mapped_column(default={})
+    """
+    tables = parse_source(source)
+    config = next(t for t in tables if t.name == "configs")
+    col = next(c for c in config.columns if c.name == "data")
+    assert col.default == "{}"
+
+
+def test_bug5_datetime_now_preserved() -> None:
+    """Generator should emit datetime.now for 'now', not datetime.utcnow."""
+    from alter.generators.sqlalchemy import _mapped_column_args
+    from alter.schema import Column
+    now_col = Column(name="created_at", type="datetime", default="now")
+    utcnow_col = Column(name="synced_at", type="datetime", default="utcnow")
+    assert "datetime.now" in _mapped_column_args(now_col, set())
+    assert "datetime.utcnow" in _mapped_column_args(utcnow_col, set())
+
+
+def test_bug6_enum_member_names_preserved() -> None:
+    """Enum member names should be stored, not just values."""
+    from alter.schema import EnumMember
+    source = """
+        import enum
+
+        class Priority(str, enum.Enum):
+            HIGH = "high"
+            LOW = "low"
+    """
+    result = parse_source_full(source)
+    assert len(result.enums) == 1
+    members = result.enums[0].values
+    assert len(members) == 2
+    assert isinstance(members[0], EnumMember)
+    assert members[0].member_name == "HIGH"
+    assert members[0].value == "high"

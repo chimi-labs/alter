@@ -321,5 +321,10 @@ def test_relation_type_valid_values() -> None:
 
 
 def test_enum_def_stores_values() -> None:
+    from alter.schema import EnumMember
     e = EnumDef(name="Status", values=["active", "inactive"])
-    assert e.values == ["active", "inactive"]
+    assert len(e.values) == 2
+    # Legacy plain strings are normalised to EnumMember
+    assert isinstance(e.values[0], EnumMember)
+    assert e.values[0].member_name == "active"
+    assert e.values[0].value == "active"

@@ -61,6 +61,7 @@ class Column(BaseModel):
     foreign_key: Optional[str] = None  # "table.column" format
     index: bool = False
     inherited: bool = False  # True if this column comes from a Python base class
+    extra_kwargs: Optional[dict[str, str]] = None  # Passthrough Field() kwargs (e.g. sa_column, regex)
 
 
 class Table(BaseModel):
@@ -86,12 +87,36 @@ class Relation(BaseModel):
     on_delete: OnDeleteType = "CASCADE"
 
 
+class EnumMember(BaseModel):
+    """A single enum member with its Python name and string value."""
+
+    member_name: str  # Python identifier (e.g. "ENDUSER")
+    value: str  # String value (e.g. "enduser")
+
+
 class EnumDef(BaseModel):
     """A named enum definition shared across tables."""
 
     name: str
-    values: list[str]
+    values: list[str | EnumMember]
     file_path: Optional[str] = None  # relative path to the file defining this enum
+
+    @field_validator("values", mode="before")
+    @classmethod
+    def normalise_values(cls, v: list) -> list:
+        """Accept both plain strings (legacy) and EnumMember dicts."""
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                # Legacy format: plain string → treat as (value, value)
+                result.append(EnumMember(member_name=item, value=item))
+            elif isinstance(item, dict):
+                result.append(EnumMember(**item))
+            elif isinstance(item, EnumMember):
+                result.append(item)
+            else:
+                result.append(item)
+        return result
 
 
 class SchemaMetadata(BaseModel):

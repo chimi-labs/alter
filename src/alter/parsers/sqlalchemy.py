@@ -408,18 +408,20 @@ def _is_enum_class(node: ast.ClassDef) -> bool:
 
 
 def _parse_enum_class(node: ast.ClassDef, file_path: str | None = None) -> EnumDef:
-    """Extract enum name, member values, and optional file_path."""
-    values: list[str] = []
+    """Extract enum name, member names, and values."""
+    from alter.schema import EnumMember
+    values: list[EnumMember] = []
     for stmt in node.body:
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 if isinstance(target, ast.Name):
+                    member_name = target.id
                     if isinstance(stmt.value, ast.Constant) and isinstance(
                         stmt.value.value, str
                     ):
-                        values.append(stmt.value.value)
+                        values.append(EnumMember(member_name=member_name, value=stmt.value.value))
                     else:
-                        values.append(target.id)
+                        values.append(EnumMember(member_name=member_name, value=member_name))
     return EnumDef(name=node.name, values=values, file_path=file_path)
 
 
@@ -713,6 +715,18 @@ def _resolve_column_type_arg(
     return "string", None
 
 
+def _strip_schema_prefix(fk: str) -> str:
+    """Normalise a foreign-key string to ``"table.column"``.
+
+    Handles both ``"table.column"`` (returned as-is) and
+    ``"schema.table.column"`` (schema prefix stripped).
+    """
+    parts = fk.split(".")
+    if len(parts) == 3:
+        return f"{parts[1]}.{parts[2]}"
+    return fk
+
+
 def _extract_foreignkey_arg(arg: ast.expr) -> str | None:
     """Extract ForeignKey("table.column") string from a Column positional arg."""
     if not isinstance(arg, ast.Call):
@@ -721,7 +735,7 @@ def _extract_foreignkey_arg(arg: ast.expr) -> str | None:
     if func_name != "ForeignKey":
         return None
     if arg.args and isinstance(arg.args[0], ast.Constant):
-        return str(arg.args[0].value)
+        return _strip_schema_prefix(str(arg.args[0].value))
     return None
 
 
@@ -735,6 +749,12 @@ def _extract_default_value(node: ast.expr) -> tuple[str | None, bool]:
         return str(node.value).lower(), False
     if isinstance(node, ast.Attribute):
         return node.attr, False
+    # Dict literal: default={}
+    if isinstance(node, ast.Dict):
+        return "{}", False
+    # List literal: default=[]
+    if isinstance(node, ast.List):
+        return "[]", False
     return None, False
 
 
@@ -807,7 +827,7 @@ def _make_relation(table_name: str, col: Column) -> Relation | None:
     """Build a Relation from a foreign_key column."""
     if not col.foreign_key:
         return None
-    parts = col.foreign_key.split(".", 1)
+    parts = col.foreign_key.rsplit(".", 1)
     if len(parts) != 2:
         return None
     to_table, to_column = parts
