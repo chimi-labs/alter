@@ -494,7 +494,8 @@ def _parse_model_class(
                     relations.append(rel)
                 warns.extend(col_warns)
 
-    table = Table(name=tablename, file_path=file_path, columns=columns)
+    schema_name = _get_table_schema(node)
+    table = Table(name=tablename, file_path=file_path, columns=columns, schema_name=schema_name)
     return table, relations, warns
 
 
@@ -761,6 +762,32 @@ def _get_tablename_value(node: ast.ClassDef) -> str | None:
                         stmt.value.value, str
                     ):
                         return stmt.value.value
+    return None
+
+
+def _get_table_schema(node: ast.ClassDef) -> str | None:
+    """Return the schema name from ``__table_args__ = {"schema": "..."}`` or None.
+
+    Handles both plain dicts and dicts with extra keys (e.g. constraints).
+    Only the ``"schema"`` key is extracted.
+    """
+    for stmt in node.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        for target in stmt.targets:
+            if not (isinstance(target, ast.Name) and target.id == "__table_args__"):
+                continue
+            value = stmt.value
+            if not isinstance(value, ast.Dict):
+                continue
+            for key, val in zip(value.keys, value.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "schema"
+                    and isinstance(val, ast.Constant)
+                    and isinstance(val.value, str)
+                ):
+                    return val.value
     return None
 
 

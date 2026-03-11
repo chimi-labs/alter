@@ -463,6 +463,32 @@ def _get_tablename(node: ast.ClassDef) -> str:
     return node.name.lower()
 
 
+def _get_table_schema(node: ast.ClassDef) -> str | None:
+    """Return the schema name from ``__table_args__ = {"schema": "..."}`` or None.
+
+    Handles both plain dicts and dicts with extra keys (e.g. constraints).
+    Only the ``"schema"`` key is extracted.
+    """
+    for stmt in node.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        for target in stmt.targets:
+            if not (isinstance(target, ast.Name) and target.id == "__table_args__"):
+                continue
+            value = stmt.value
+            if not isinstance(value, ast.Dict):
+                continue
+            for key, val in zip(value.keys, value.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "schema"
+                    and isinstance(val, ast.Constant)
+                    and isinstance(val.value, str)
+                ):
+                    return val.value
+    return None
+
+
 def _parse_table_class(
     node: ast.ClassDef,
     file_path: str,
@@ -476,6 +502,7 @@ def _parse_table_class(
     name overrides the inherited one.
     """
     table_name = _get_tablename(node)
+    schema_name = _get_table_schema(node)
     relations: list[Relation] = []
     warns: list[str] = []
 
@@ -570,7 +597,13 @@ def _parse_table_class(
     columns = [c for c in inherited_columns if c.name not in local_names]
     columns.extend(local_columns)
 
-    table = Table(name=table_name, file_path=file_path, columns=columns, bases=all_base_names)
+    table = Table(
+        name=table_name,
+        file_path=file_path,
+        columns=columns,
+        bases=all_base_names,
+        schema_name=schema_name,
+    )
     return table, relations, warns
 
 

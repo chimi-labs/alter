@@ -153,6 +153,9 @@ def _model_class_source(
     lines: list[str] = [f"class {name}({bases_str}):"]
     # Emit __tablename__ (always — it's explicit and unambiguous)
     lines.append(f'    __tablename__ = "{table.name}"')
+    # Emit __table_args__ when the table lives in a PostgreSQL schema
+    if table.schema_name:
+        lines.append(f'    __table_args__ = {{"schema": "{table.schema_name}"}}')
     lines.append("")
     # Only emit non-inherited columns — inherited ones live in the base classes
     for col in table.columns:

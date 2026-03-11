@@ -73,6 +73,7 @@ class Table(BaseModel):
     columns: list[Column] = Field(default_factory=list)
     indexes: list[Index] = Field(default_factory=list)
     bases: list[str] = Field(default_factory=list)  # Python base class names (e.g. ["UUIDBase"])
+    schema_name: Optional[str] = None  # PostgreSQL schema (e.g. "myschema"); round-trips via __table_args__
 
 
 class Relation(BaseModel):
