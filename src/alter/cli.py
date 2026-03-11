@@ -391,15 +391,23 @@ def apply(alter_file: str | None, preview: bool) -> None:
     changed = 0
     for rel_path, tables in sorted(file_groups.items()):
         abs_path = project_root / rel_path
+        # Only emit enum classes that belong to this specific file.
+        # Enums with file_path=None are treated as local to every file that
+        # needs them (single-file projects); enums with an explicit file_path
+        # are only emitted in that file — matching the preview_apply behaviour.
+        local_enum_names = {
+            e.name for e in schema.enums
+            if e.file_path is None or e.file_path == rel_path
+        }
         file_schema = schema.model_copy(update={"tables": tables})
 
         try:
             if abs_path.exists():
                 existing = abs_path.read_text()
-                updated = gen.update_models(file_schema, existing)
+                updated = gen.update_models(file_schema, existing, local_enum_names=local_enum_names)
             else:
                 existing = ""
-                updated = gen.generate_models(file_schema)
+                updated = gen.generate_models(file_schema, local_enum_names=local_enum_names)
         except (AlterError, Exception) as exc:
             click.echo(f"  ✗  {rel_path}: {exc}", err=True)
             sys.exit(1)
