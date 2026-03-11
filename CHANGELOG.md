@@ -2,6 +2,62 @@
 
 All notable changes to Alter are documented here.
 
+## [0.1.5] — 2026-03-11
+
+### Fixed
+
+#### `import alterdb` shim package
+
+- Added `src/alterdb/__init__.py` re-exporting `alter`, and `src/alterdb` to
+  `pyproject.toml` packages, so `import alterdb` works as a drop-in alias for
+  `import alter`.
+
+#### `schema_name` not extracted when `__table_args__` is a tuple
+
+- `_get_table_schema` in both parsers now handles the common
+  `(__table_args__ = ({"schema": "x"}, constraint, …))` tuple form in addition
+  to the bare `{"schema": "x"}` dict form.
+
+#### SQL and Mermaid exporters ignore `schema_name`
+
+- SQL exporter: added `_qualified_name()` helper; `CREATE TABLE` headers and
+  `REFERENCES` clauses now emit `schema.table` when `schema_name` is set.
+  `_table_to_sql`'s `table_by_name` parameter is optional for back-compat.
+- Mermaid exporter: entity names and relation lines use `schema_table`
+  (underscore-joined) for valid Mermaid identifiers.
+
+#### `alter validate` rejects schema-prefixed foreign keys
+
+- Added `_parse_fk_reference()` that accepts both `"table.column"` and
+  `"schema.table.column"`; the error message now documents both formats.
+
+#### `Optional[List[Any]]` with `sa_column=Column(JSON)` silently dropped
+
+- `_is_primitive_element()` distinguishes primitive element types from model
+  classes; `_annotation_is_list` no longer skips `list[primitive]`; and
+  `_resolve_annotation` returns `"json_array"` for `List[primitive]` (including
+  `List[Any]`).
+
+#### Unreferenced enums from non-SQLModel-table files collected into `schema.alter`
+
+- `parse_directory` post-filters `schema.enums` to only retain enums actually
+  referenced by a column type in at least one parsed table.
+
+#### `alter apply` rewrites `Field()` calls unnecessarily
+
+Three sub-fixes in `generators/_surgical.py`:
+
+- **Spurious default rewrite** — `_normalize_kw_for_eq()` treats `default={}`
+  as equivalent to `default_factory=dict` (and `default=[]` ≡
+  `default_factory=list`), so `_field_kwargs_equal` returns `True` and no
+  rebuild is triggered when nothing truly changed.
+- **Kwarg order shuffled** — the merging loop in `_rebuild_field_line` now
+  detects the mutable-default equivalence and preserves the existing kwarg name
+  and position rather than dropping it and appending `default_factory` at the
+  end.
+- **Trailing inline comments stripped** — `_extract_trailing_comment()` captures
+  any `# …` suffix after the closing `)` and re-attaches it to the rebuilt line.
+
 ## [0.1.4] — 2026-03-11
 
 ### Fixed
