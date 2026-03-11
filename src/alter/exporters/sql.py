@@ -88,17 +88,30 @@ def _column_to_sql(col: Column, inline_pk: bool = True) -> str:
         parts.append("UNIQUE")
 
     if col.default is not None:
-        parts.append(f"DEFAULT {_format_default(col.default)}")
+        sql_default = _format_default(col.default)
+        if sql_default is not None:
+            parts.append(f"DEFAULT {sql_default}")
 
     return " ".join(parts)
 
 
-def _format_default(default: str) -> str:
-    """Format a default value for SQL output."""
+def _format_default(default: str) -> str | None:
+    """Format a default value for SQL output.
+
+    Returns ``None`` to omit the DEFAULT clause entirely when the stored
+    default has no meaningful SQL equivalent (e.g. Python-only lambda
+    expressions stored as ``expr:...``).
+    """
+    # Python-only default_factory expressions — no SQL equivalent
+    if default.startswith("expr:"):
+        return None
     if default == "uuid4":
         return "gen_random_uuid()"
-    if default == "utcnow":
+    if default in ("utcnow", "now"):
         return "now()"
+    # list/dict factory defaults → empty JSONB literal
+    if default in ("list", "dict", "{}", "[]"):
+        return "'[]'::jsonb"
     if default.upper() in ("TRUE", "FALSE"):
         return default.upper()
     # Numeric literal — emit as-is
