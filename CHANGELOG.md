@@ -22,8 +22,8 @@ All notable changes to Alter are documented here.
 
 #### `alter apply` minimal-diff principle — five additional bugs
 
-- **Schema-qualified foreign keys stripped** — `foreign_key="alpha_ai.sessions.id"` was
-  written back as `foreign_key="sessions.id"`, breaking SQLAlchemy's cross-schema FK
+- **Schema-qualified foreign keys stripped** — `foreign_key="myschema.table.column"` was
+  written back as `foreign_key="table.column"`, breaking SQLAlchemy's cross-schema FK
   resolution. Both the SQLModel and SQLAlchemy parsers now store `Column.foreign_key`
   verbatim. `Relation.to_table` still holds the unqualified table name for the canvas.
 
