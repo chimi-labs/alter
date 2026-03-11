@@ -48,8 +48,9 @@ TYPE_MAP: dict[str, TypeEntry] = {
     "datetime": TypeEntry("datetime",   "TIMESTAMPTZ"),
     "date":     TypeEntry("date",       "DATE"),
     "time":     TypeEntry("time",       "TIME"),
-    "json":     TypeEntry("dict",       "JSONB"),
-    "bytes":    TypeEntry("bytes",      "BYTEA"),
+    "json":       TypeEntry("dict",       "JSONB"),
+    "json_array": TypeEntry("list",       "JSONB"),
+    "bytes":      TypeEntry("bytes",      "BYTEA"),
 }
 
 # ---------------------------------------------------------------------------
@@ -69,8 +70,8 @@ _PYTHON_ALIASES: dict[str, str] = {
     "float":             "float",
     "bool":              "bool",
     "dict":              "json",
-    "list":              "json",
-    "List":              "json",
+    "list":              "json_array",
+    "List":              "json_array",
     "bytes":             "bytes",
     "Decimal":           "decimal",
     "datetime":          "datetime",

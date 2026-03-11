@@ -405,8 +405,12 @@ def test_schema_qualified_foreign_key_relation() -> None:
     assert rel.to_column == "id"
 
 
-def test_schema_qualified_foreign_key_column_stripped() -> None:
-    """Column.foreign_key should store 'table.column', not 'schema.table.column'."""
+def test_schema_qualified_foreign_key_column_preserved() -> None:
+    """Column.foreign_key must store the verbatim string including schema prefix.
+
+    Bug fix (v0.1.3): previously the schema prefix was stripped, which broke
+    cross-schema FK round-trips.  Now the full string is preserved.
+    """
     source = """
         from sqlmodel import SQLModel, Field
 
@@ -416,7 +420,7 @@ def test_schema_qualified_foreign_key_column_stripped() -> None:
     """
     tables = parse_source(source)
     col = next(c for c in tables[0].columns if c.name == "user_id")
-    assert col.foreign_key == "users.id"
+    assert col.foreign_key == "alpha_ai.users.id"
 
 
 # ---------------------------------------------------------------------------
@@ -888,11 +892,15 @@ def test_bug2_sa_column_preserved() -> None:
     assert "sa_column" in col.extra_kwargs
 
 
-def test_bug3_bare_list_resolves_to_json() -> None:
-    """Optional[list] should resolve to json, not string."""
+def test_bug3_bare_list_resolves_to_json_array() -> None:
+    """Optional[list] should resolve to json_array (not json or string).
+
+    Bug fix (v0.1.3): bare list now maps to the dedicated 'json_array' alter
+    type so it round-trips back as list instead of dict.
+    """
     from alter.types import python_to_alter
-    assert python_to_alter("list") == "json"
-    assert python_to_alter("List") == "json"
+    assert python_to_alter("list") == "json_array"
+    assert python_to_alter("List") == "json_array"
 
 
 def test_bug4_dict_literal_default_preserved() -> None:

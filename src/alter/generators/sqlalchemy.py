@@ -34,8 +34,9 @@ _SQLA_TYPE: dict[str, str] = {
     "datetime": "DateTime",
     "date":     "Date",
     "time":     "Time",
-    "json":     "JSON",
-    "bytes":    "LargeBinary",
+    "json":       "JSON",
+    "json_array": "JSON",
+    "bytes":      "LargeBinary",
 }
 
 

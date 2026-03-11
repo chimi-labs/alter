@@ -715,18 +715,6 @@ def _resolve_column_type_arg(
     return "string", None
 
 
-def _strip_schema_prefix(fk: str) -> str:
-    """Normalise a foreign-key string to ``"table.column"``.
-
-    Handles both ``"table.column"`` (returned as-is) and
-    ``"schema.table.column"`` (schema prefix stripped).
-    """
-    parts = fk.split(".")
-    if len(parts) == 3:
-        return f"{parts[1]}.{parts[2]}"
-    return fk
-
-
 def _extract_foreignkey_arg(arg: ast.expr) -> str | None:
     """Extract ForeignKey("table.column") string from a Column positional arg."""
     if not isinstance(arg, ast.Call):
@@ -735,7 +723,7 @@ def _extract_foreignkey_arg(arg: ast.expr) -> str | None:
     if func_name != "ForeignKey":
         return None
     if arg.args and isinstance(arg.args[0], ast.Constant):
-        return _strip_schema_prefix(str(arg.args[0].value))
+        return str(arg.args[0].value)  # preserve verbatim — schema prefix must round-trip
     return None
 
 
@@ -824,13 +812,19 @@ def _const_bool(node: ast.expr) -> bool | None:
 
 
 def _make_relation(table_name: str, col: Column) -> Relation | None:
-    """Build a Relation from a foreign_key column."""
+    """Build a Relation from a foreign_key column.
+
+    ``col.foreign_key`` is stored verbatim (e.g. ``"table.col"`` or
+    ``"schema.table.col"``).  ``Relation.to_table`` holds the unqualified
+    table name so the canvas can render it without schema prefixes.
+    """
     if not col.foreign_key:
         return None
     parts = col.foreign_key.rsplit(".", 1)
     if len(parts) != 2:
         return None
-    to_table, to_column = parts
+    to_table_raw, to_column = parts
+    to_table = to_table_raw.rsplit(".", 1)[-1]
     return Relation(
         name=f"{table_name}_{col.name}_fkey",
         from_table=table_name,

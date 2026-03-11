@@ -332,7 +332,7 @@ def test_is_enum_type_false_for_empty_string() -> None:
 def test_type_map_covers_all_expected_types() -> None:
     expected = {
         "uuid", "string", "text", "int", "bigint", "float",
-        "decimal", "bool", "datetime", "date", "time", "json", "bytes",
+        "decimal", "bool", "datetime", "date", "time", "json", "json_array", "bytes",
     }
     assert set(TYPE_MAP.keys()) == expected
 

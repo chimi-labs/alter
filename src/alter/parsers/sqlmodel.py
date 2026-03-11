@@ -727,7 +727,7 @@ def _parse_field_call(
                 elif arg == "foreign_key":
                     v = _const_value(kw_val)
                     if isinstance(v, str):
-                        foreign_key = _strip_schema_prefix(v)
+                        foreign_key = v  # preserve verbatim — schema prefix must round-trip
 
                 elif arg == "nullable":
                     v = _const_bool(kw_val)
@@ -839,31 +839,22 @@ def _const_bool(node: ast.expr) -> bool | None:
     return None
 
 
-def _strip_schema_prefix(fk: str) -> str:
-    """Normalise a foreign-key string to ``"table.column"``.
-
-    Handles both ``"table.column"`` (returned as-is) and
-    ``"schema.table.column"`` (schema prefix stripped).
-    """
-    parts = fk.split(".")
-    if len(parts) == 3:
-        # schema.table.column → table.column
-        return f"{parts[1]}.{parts[2]}"
-    return fk
-
-
 def _make_relation(table_name: str, col: Column) -> Relation | None:
     """Build a Relation from a foreign_key column.
 
-    ``col.foreign_key`` is expected to be ``"to_table.to_column"``
-    (schema prefix, if any, must already be stripped).
+    ``col.foreign_key`` is stored verbatim (e.g. ``"table.col"`` or
+    ``"schema.table.col"``).  We split on the *last* dot to get the column
+    name, then strip any schema prefix from the table part so that the
+    canvas-facing ``Relation.to_table`` holds the unqualified table name.
     """
     if not col.foreign_key:
         return None
     parts = col.foreign_key.rsplit(".", 1)
     if len(parts) != 2:
         return None
-    to_table, to_column = parts
+    to_table_raw, to_column = parts
+    # Strip leading schema qualifier ("alpha_ai.sessions" → "sessions")
+    to_table = to_table_raw.rsplit(".", 1)[-1]
     return Relation(
         name=f"{table_name}_{col.name}_fkey",
         from_table=table_name,

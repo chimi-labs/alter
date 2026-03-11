@@ -61,11 +61,15 @@ def _parse_field_kwargs(line: str) -> dict[str, str] | None:
 
     Positional args are stored as ``__pos_0``, ``__pos_1``, … so they still
     participate in equality comparison.
+
+    Handles multi-line field text by joining lines before parsing.
     """
+    # Join multi-line text to a single line for parsing
+    joined = " ".join(line.splitlines())
     for sep in ("= Field(", "= mapped_column("):
-        pos = line.find(sep)
+        pos = joined.find(sep)
         if pos != -1:
-            rhs = line[pos + 2:].strip()
+            rhs = joined[pos + 2:].strip()
             break
     else:
         return None
@@ -88,28 +92,189 @@ def _parse_field_kwargs(line: str) -> dict[str, str] | None:
 
 
 def _field_lhs(line: str) -> str:
-    """Return the ``name: Type`` portion of a field line (normalised whitespace)."""
+    """Return the ``name: Type`` portion of a field line (normalised whitespace).
+
+    For multi-line fields, uses only the first line.
+    """
+    first_line = line.splitlines()[0] if "\n" in line else line
     for sep in ("= Field(", "= mapped_column("):
-        pos = line.find(sep)
+        pos = first_line.find(sep)
         if pos != -1:
-            return " ".join(line[:pos].split())
+            return " ".join(first_line[:pos].split())
     return line.strip()
+
+
+def _strip_optional_from_annotation(ann: str) -> str:
+    """Strip ``Optional[...]`` wrapper from a type-annotation string.
+
+    ``"Optional[uuid.UUID]"`` → ``"uuid.UUID"``.
+    Nested/complex types are returned unchanged.
+    """
+    t = ann.strip()
+    if t.startswith("Optional[") and t.endswith("]"):
+        return t[len("Optional["):-1].strip()
+    return t
+
+
+def _lhs_type_part(lhs: str) -> str:
+    """Extract the type annotation part from ``"name: Type"``."""
+    if ":" in lhs:
+        return lhs.split(":", 1)[1].strip()
+    return lhs
 
 
 def _field_kwargs_equal(existing: str, new: str) -> bool:
     """Semantic equality: same ``name: Type`` LHS **and** same Field() kwargs
     (order-independent).  Falls back to stripped string comparison if AST
     parsing fails.
+
+    Bug-3 fix: for primary-key fields the type annotation may be
+    ``Optional[X]`` in the existing file even though the schema generates
+    ``X``.  We treat those as equal to avoid spurious rewrites.
     """
     if existing.rstrip() == new.rstrip():
         return True
-    if _field_lhs(existing) != _field_lhs(new):
-        return False
+
+    existing_lhs = _field_lhs(existing)
+    new_lhs = _field_lhs(new)
+
+    if existing_lhs != new_lhs:
+        # Allow Optional[X] vs X discrepancy on PK fields (Bug 3).
+        # If stripping Optional from the existing annotation makes the LHS equal,
+        # and the new field is a primary key, treat as matching.
+        existing_type = _lhs_type_part(existing_lhs)
+        new_type = _lhs_type_part(new_lhs)
+        existing_name = existing_lhs.split(":")[0].strip() if ":" in existing_lhs else existing_lhs
+        new_name = new_lhs.split(":")[0].strip() if ":" in new_lhs else new_lhs
+        # Names must still match
+        if existing_name != new_name:
+            return False
+        # Accept Optional[X] == X only when primary_key=True is in the new kwargs
+        nkw = _parse_field_kwargs(new)
+        if nkw and nkw.get("primary_key") == "True":
+            if _strip_optional_from_annotation(existing_type) == new_type:
+                # LHS now equivalent — fall through to kwargs comparison
+                pass
+            else:
+                return False
+        else:
+            return False
+
     ekw = _parse_field_kwargs(existing)
     nkw = _parse_field_kwargs(new)
     if ekw is None or nkw is None:
         return existing.rstrip() == new.rstrip()
     return ekw == nkw
+
+
+# ---------------------------------------------------------------------------
+# Minimal-diff field replacement (Bugs 4 & 5)
+# ---------------------------------------------------------------------------
+
+def _get_kwarg_order(field_text: str) -> list[str]:
+    """Return the ordered list of kwarg names from a Field() / mapped_column()
+    call.  Positional args get synthetic names ``__pos_0`` etc."""
+    joined = " ".join(field_text.splitlines())
+    for sep in ("= Field(", "= mapped_column("):
+        pos = joined.find(sep)
+        if pos != -1:
+            rhs = joined[pos + 2:].strip()
+            break
+    else:
+        return []
+    try:
+        tree = ast.parse(rhs, mode="eval")
+    except SyntaxError:
+        return []
+    if not isinstance(tree.body, ast.Call):
+        return []
+    order: list[str] = []
+    for i, _ in enumerate(tree.body.args):
+        order.append(f"__pos_{i}")
+    for k in tree.body.keywords:
+        if k.arg:
+            order.append(k.arg)
+    return order
+
+
+def _rebuild_field_line(
+    existing_text: str,
+    new_schema_line: str,
+) -> str:
+    """Return a replacement for *existing_text* that applies changes from
+    *new_schema_line* while preserving:
+
+    * The original kwarg order for kwargs that haven't changed (Bug 5).
+    * Multi-line formatting when the original spans multiple lines (Bug 4).
+    * The original type annotation (LHS) verbatim (Bug 3 — keeps Optional[X]).
+
+    Algorithm:
+    1. Parse existing and new kwargs into dicts.
+    2. Build the merged kwarg list: existing order first (keep/update each
+       kwarg); append new kwargs not in original at the end; drop kwargs
+       removed from schema.
+    3. Reconstruct ``Field(...)`` from the merged list.
+    4. If the original was multi-line, format the result as multi-line.
+    """
+    existing_kw = _parse_field_kwargs(existing_text) or {}
+    new_kw = _parse_field_kwargs(new_schema_line) or {}
+    existing_order = _get_kwarg_order(existing_text)
+
+    # Determine leading indent from the existing text
+    first_line = existing_text.splitlines()[0] if existing_text else new_schema_line
+    indent = len(first_line) - len(first_line.lstrip())
+    indent_str = first_line[:indent]
+
+    # Detect the call keyword (Field or mapped_column)
+    joined = " ".join(existing_text.splitlines())
+    if "= mapped_column(" in joined:
+        call_kw = "mapped_column"
+    else:
+        call_kw = "Field"
+
+    # Use the LHS from the EXISTING field (preserves Optional[X] etc.) — Bug 3
+    existing_lhs = _field_lhs(existing_text)
+
+    # Build ordered merged kwargs:
+    # - Walk existing order; update value if changed; skip if removed from new.
+    # - Append any new kwargs not in original.
+    merged: list[str] = []
+    seen: set[str] = set()
+    for key in existing_order:
+        if key not in new_kw:
+            continue  # kwarg was removed from schema
+        val = new_kw[key]
+        if key.startswith("__pos_"):
+            merged.append(val)  # positional
+        else:
+            merged.append(f"{key}={val}")
+        seen.add(key)
+
+    for key, val in new_kw.items():
+        if key in seen:
+            continue
+        if key.startswith("__pos_"):
+            merged.append(val)
+        else:
+            merged.append(f"{key}={val}")
+
+    args_str = ", ".join(merged)
+
+    # Preserve multi-line formatting (Bug 4): if original was multi-line,
+    # emit each kwarg on its own line.
+    original_lines = existing_text.splitlines()
+    was_multiline = len(original_lines) > 1
+
+    if was_multiline and merged:
+        inner_indent = indent_str + "    "
+        lines = [f"{indent_str}{existing_lhs} = {call_kw}("]
+        for i, arg in enumerate(merged):
+            comma = "," if i < len(merged) - 1 else ""
+            lines.append(f"{inner_indent}{arg}{comma}")
+        lines.append(f"{indent_str})")
+        return "\n".join(lines)
+    else:
+        return f"{indent_str}{existing_lhs} = {call_kw}({args_str})"
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +333,10 @@ def _surgical_patch_class(
        line range (handles multi-line calls).
     2. Walk source lines:
        - Field() lines whose kwargs match the schema → emitted verbatim (preserves
-         hand-written kwarg order).
-       - Field() lines whose kwargs differ → replaced with the schema version.
+         hand-written kwarg order and multi-line formatting).
+       - Field() lines whose kwargs differ → rebuilt via ``_rebuild_field_line``
+         which preserves kwarg order, multi-line style, and the existing LHS
+         type annotation (Bug 3/4/5).
        - All other lines (docstring, Relationship, comments, __tablename__, blanks,
          class header) → emitted verbatim.
     3. New schema columns (absent from the file) are inserted immediately after
@@ -207,10 +374,11 @@ def _surgical_patch_class(
             # Collect the full existing field text (may span multiple lines)
             existing_text = "".join(src_lines[i:end]).rstrip()
             if col_name in schema_map and not _field_kwargs_equal(existing_text, schema_map[col_name]):
-                # Replace with schema version
-                result.append(schema_map[col_name].rstrip() + "\n")
+                # Rebuild with original kwarg order / multi-line style / LHS preserved
+                rebuilt = _rebuild_field_line(existing_text, schema_map[col_name])
+                result.append(rebuilt.rstrip() + "\n")
             else:
-                # Keep verbatim (unchanged field — preserves kwarg order)
+                # Keep verbatim (unchanged field — preserves kwarg order and formatting)
                 for ln in src_lines[i:end]:
                     result.append(ln)
             last_field_result_idx = len(result) - 1

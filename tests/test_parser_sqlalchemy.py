@@ -250,8 +250,12 @@ def test_schema_qualified_foreign_key_relation() -> None:
     assert rels[0].to_column == "id"
 
 
-def test_schema_qualified_foreign_key_column_stripped() -> None:
-    """Column.foreign_key should store 'table.column', not 'schema.table.column'."""
+def test_schema_qualified_foreign_key_column_preserved() -> None:
+    """Column.foreign_key must store the verbatim string including schema prefix.
+
+    Bug fix (v0.1.3): previously the schema prefix was stripped, which broke
+    SQLAlchemy's cross-schema FK resolution.  Now the full string is preserved.
+    """
     source = """
         from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
         from sqlalchemy import ForeignKey
@@ -267,7 +271,7 @@ def test_schema_qualified_foreign_key_column_stripped() -> None:
     tables = parse_source(source)
     session = next(t for t in tables if t.name == "sessions")
     col = next(c for c in session.columns if c.name == "user_id")
-    assert col.foreign_key == "users.id"
+    assert col.foreign_key == "alpha_ai.users.id"
 
 
 def test_legacy_column_unique() -> None:
