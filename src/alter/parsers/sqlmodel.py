@@ -445,7 +445,7 @@ def _extract_base_class_columns(
         if alter_type == "_relationship":
             continue
 
-        col, _ = _parse_field_call(field_name, alter_type, is_optional, value)
+        col, _ = _parse_field_call(field_name, alter_type, is_optional, value, known_enums)
         columns.append(col)
     return columns
 
@@ -579,7 +579,7 @@ def _parse_table_class(
 
         # Build the column from Field() kwargs
         col, extra_warns = _parse_field_call(
-            field_name, alter_type, is_optional, value
+            field_name, alter_type, is_optional, value, known_enums
         )
         warns.extend(extra_warns)
         local_columns.append(col)
@@ -718,8 +718,16 @@ def _parse_field_call(
     alter_type: str,
     is_optional: bool,
     value: ast.expr | None,
+    known_enums: dict[str, "EnumDef"] | None = None,
 ) -> tuple[Column, list[str]]:
-    """Build a Column from the field name, resolved type, and Field() call node."""
+    """Build a Column from the field name, resolved type, and Field() call node.
+
+    Args:
+        known_enums: Used for ``sa_column=Column(SQLEnum(...))`` type override —
+            when the SA column expression names a known enum class, the alter
+            type is updated to that enum name so the canvas shows the correct
+            type instead of "string".
+    """
     warns: list[str] = []
     nullable = is_optional
     primary_key = False
@@ -790,6 +798,27 @@ def _parse_field_call(
                     warns.append(
                         f"  Field({arg}=...) on '{field_name}' not mapped to schema"
                     )
+
+    # ------------------------------------------------------------------
+    # sa_column / sa_type type override
+    # ------------------------------------------------------------------
+    # When a field uses sa_column=Column(JSON) or sa_type=JSONB the Python
+    # annotation (e.g. str, dict) is misleading.  We inspect the stored
+    # expression string and promote the alter type to the correct value so
+    # that the canvas and SQL exports reflect the real database column type.
+    sa_expr = extra_kwargs.get("sa_column") or extra_kwargs.get("sa_type", "")
+    if sa_expr:
+        import re as _re
+        sa_upper = sa_expr.upper()
+        if "JSON" in sa_upper and alter_type not in ("json", "json_array"):
+            # Column(JSON) / Column(JSONB) / JSON / JSONB
+            alter_type = "json"
+        else:
+            # SQLEnum(MyEnum, ...) or Enum(MyEnum, ...) — use the enum name
+            # if it matches a known enum class.
+            enum_match = _re.search(r'(?:SQLEnum|Enum)\((\w+)', sa_expr)
+            if enum_match and known_enums and enum_match.group(1) in known_enums:
+                alter_type = enum_match.group(1)
 
     col = Column(
         name=field_name,
