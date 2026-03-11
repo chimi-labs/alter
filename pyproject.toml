@@ -35,6 +35,7 @@ dependencies = [
     "sqlalchemy>=2.0",
     "sqlparse>=0.5",
     "watchfiles>=0.20",
+    "twine>=6.2.0",
 ]
 
 [project.optional-dependencies]

@@ -131,7 +131,8 @@ alter apply             # write the changes to your model files
 ```
 
 `alter apply` is surgical — it only modifies the classes that changed. Your docstrings,
-`Relationship()` definitions, inline comments, and hand-written formatting are preserved.
+`Relationship()` definitions, trailing inline comments, hand-written `Field()` kwarg order,
+and mutable defaults written as `default={}` or `default=[]` are all preserved verbatim.
 
 For example, drawing a `Payment` table on the canvas and clicking **Commit** writes this to
 `app/models.py`:
@@ -262,6 +263,15 @@ alter add lib/plugins/billing.py      # tables already in the schema are skipped
 `alter add` parses the file, adds any new tables (and their enum types), and saves `schema.alter`.
 Already-tracked tables are silently skipped — safe to run multiple times.
 
+## PostgreSQL Schema Support
+
+Tables in a non-default PostgreSQL schema (i.e. with a `__table_args__ = {"schema": "..."}` entry) are fully supported end-to-end:
+
+- **Parsing** — both `{"schema": "billing"}` dict form and the tuple form `({"schema": "billing"}, UniqueConstraint(...))` are recognised.
+- **SQL export** — `CREATE TABLE` headers and `REFERENCES` clauses use the qualified `schema.table` name.
+- **Mermaid export** — entity names use `schema_table` (underscore-joined) for valid Mermaid identifiers; relation lines follow the same convention.
+- **Validation** — foreign keys may be written as `table.column` or `schema.table.column`.
+
 ## Cross-File Support
 
 Alter understands multi-file projects out of the box:
@@ -349,6 +359,9 @@ alter validate
 Reports errors (broken FK references, duplicate table names, unsupported type
 combinations), warnings, and info-level hints. Exits with code 1 if any errors
 are found — safe to use in CI.
+
+Foreign key references can be written as `table.column` or `schema.table.column`
+for tables in a non-default PostgreSQL schema.
 
 ### `alter export`
 
