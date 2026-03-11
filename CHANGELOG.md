@@ -2,11 +2,51 @@
 
 All notable changes to Alter are documented here.
 
-## [Unreleased]
+## [0.1.3] — 2026-03-11
 
 ### Fixed
 
-#### Parser & round-trip fidelity (7 bugs)
+#### `alter canvas` crash on projects with `mcp < 1.2.0`
+
+- **`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`** — `alter canvas`
+  crashed in projects where an older `mcp` version was installed as a dependency
+  (e.g. pinned transitively by uvicorn/starlette). Root cause: `FastMCP` was imported
+  at module level in `mcp_server.py`, so any import of that module — including the
+  canvas server's import of two helper functions — triggered the crash.
+
+  Fix: introduced a `_LazyMCP` proxy that buffers `@mcp.tool()` / `@mcp.resource()`
+  decorator calls at import time without touching FastMCP. The real `FastMCP` instance
+  is created inside `init_mcp()`, which is only called when `alter mcp` is explicitly
+  invoked. The `mcp` dependency floor was also reverted from `>=1.2.0` back to `>=1.0`
+  so that `uv add alterdb` does not conflict with projects pinned to older versions.
+
+#### `alter apply` minimal-diff principle — five additional bugs
+
+- **Schema-qualified foreign keys stripped** — `foreign_key="alpha_ai.sessions.id"` was
+  written back as `foreign_key="sessions.id"`, breaking SQLAlchemy's cross-schema FK
+  resolution. Both the SQLModel and SQLAlchemy parsers now store `Column.foreign_key`
+  verbatim. `Relation.to_table` still holds the unqualified table name for the canvas.
+
+- **`Optional[list]` rewritten as `Optional[dict]`** — bare `list` / `List` annotations
+  were parsed as the `json` alter type, which maps back to Python `dict`. A new dedicated
+  `json_array` alter type (`TypeEntry("list", "JSONB")`) ensures `list` round-trips as
+  `list`.
+
+- **`Optional[str]` PK annotation forced to `str`** — the surgical updater now treats
+  `Optional[X]` as semantically equivalent to `X` on primary-key fields, so an existing
+  `id: Optional[str] = Field(primary_key=True)` is left untouched.
+
+- **Multi-line `Field()` calls collapsed to a single line** — when a field that needed
+  updating was originally formatted across multiple lines, the replacement was always
+  emitted as a single line. The surgical patcher now preserves the original multi-line
+  style.
+
+- **`Field()` kwarg order changed on replacement** — when a field did need updating, the
+  generator's canonical kwarg order replaced the hand-written one. The surgical patcher
+  now rebuilds only the kwargs that actually changed, keeping everything else in its
+  original position.
+
+#### Parser & round-trip fidelity (7 bugs fixed in earlier commit)
 
 - **Schema-qualified foreign keys** (`"schema.table.column"`) now parse correctly in
   both the SQLModel and SQLAlchemy parsers. Previously the schema name was used as the
@@ -23,9 +63,6 @@ All notable changes to Alter are documented here.
 - **Validator kwargs** (`regex`, `ge`, `le`, `gt`, `lt`, `min_length`) are no longer
   in the `pass` block. They are also captured in `Column.extra_kwargs` and re-emitted,
   so `Field(regex=r"^[a-z_]+$")` is preserved on apply.
-
-- **Bare `list` / `List` type annotations** (`Optional[list]`) now resolve to the
-  `json` alter type instead of falling back to `string`.
 
 - **Dict and list literal defaults** (`default={}`, `default=[]`) are no longer dropped.
   They are stored as `"{}"` / `"[]"` and emitted as `default_factory=dict` /
@@ -49,6 +86,9 @@ All notable changes to Alter are documented here.
   literal) fields. `EnumDef.values` now holds a list of `EnumMember` objects.
   Backward-compatible: existing `.alter` files with `values: ["a", "b"]` are accepted
   and auto-upgraded.
+
+- New `json_array` alter type for bare `list` / `List` annotations. Columns typed as
+  `Optional[list]` now round-trip correctly instead of becoming `Optional[dict]`.
 
 ### Documentation
 
