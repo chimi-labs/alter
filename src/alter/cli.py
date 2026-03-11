@@ -137,6 +137,7 @@ FILE_OPTION = click.option(
 
 
 @click.group()
+@click.version_option(package_name="alterdb")
 def main() -> None:
     """Alter — understand your database first, design it second."""
 
