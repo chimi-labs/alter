@@ -160,7 +160,10 @@ class SQLAlchemyParser(BaseParser):
         all_warnings: list[str] = []
         skipped: list[Path] = []
 
-        py_files = iter_py_files(directory)
+        # list() materialises the result so that both Phase 1 and Phase 2 can
+        # iterate it independently.  iter_py_files already returns a list, but
+        # the explicit wrap guards against any future change to a generator.
+        py_files = list(iter_py_files(directory))
 
         # ------------------------------------------------------------------
         # Phase 1 — collect all enum definitions (enum-only files included)

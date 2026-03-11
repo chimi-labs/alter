@@ -36,6 +36,11 @@ def iter_py_files(directory: Path) -> list[Path]:
 
     Uses :func:`os.walk` with in-place directory filtering so that excluded
     subtrees (virtual envs, caches, build artefacts) are never descended into.
+
+    **Must return a list** (not a generator): callers such as
+    ``parse_directory`` iterate the result twice — once to collect enum/base
+    definitions and again to parse ORM files.  If this function ever changes
+    to use ``yield``, the second iteration would silently produce nothing.
     """
     result: list[Path] = []
     for root, dirs, files in os.walk(directory):
