@@ -42,8 +42,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
-
 from alter.diff import diff_schemas
 from alter.errors import AlterError
 from alter.schema import AlterSchema, Column, EnumDef, Relation, Table
@@ -54,7 +52,51 @@ from alter.validate import validate_schema
 # Server singleton + state
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("Alter")
+
+class _LazyMCP:
+    """Proxy that buffers @mcp.tool() and @mcp.resource() registrations.
+
+    All decorator calls at module import time are stored without touching
+    FastMCP (which lives in ``mcp.server.fastmcp`` and is only available in
+    ``mcp>=1.2.0``).  When ``init_mcp()`` creates the real FastMCP instance,
+    ``_init_real()`` replays all registrations so that ``mcp.run()`` works.
+
+    This lets ``canvas/server.py`` import ``_apply_to_code_impl`` and
+    ``_sync_from_code_impl`` from this module without crashing on projects
+    where ``mcp<1.2.0`` is installed as a project dependency.
+    """
+
+    def __init__(self) -> None:
+        self._pending_tools: list[tuple[Any, dict[str, Any]]] = []
+        self._pending_resources: list[tuple[Any, str, dict[str, Any]]] = []
+        self._real: Any = None
+
+    def tool(self, **kwargs: Any) -> Any:
+        def decorator(fn: Any) -> Any:
+            self._pending_tools.append((fn, kwargs))
+            return fn
+        return decorator
+
+    def resource(self, uri: str, **kwargs: Any) -> Any:
+        def decorator(fn: Any) -> Any:
+            self._pending_resources.append((fn, uri, kwargs))
+            return fn
+        return decorator
+
+    def _init_real(self, real_mcp: Any) -> None:
+        self._real = real_mcp
+        for fn, kwargs in self._pending_tools:
+            real_mcp.tool(**kwargs)(fn)
+        for fn, uri, kwargs in self._pending_resources:
+            real_mcp.resource(uri, **kwargs)(fn)
+
+    def run(self, **kwargs: Any) -> None:
+        if self._real is None:
+            raise RuntimeError("MCP server not initialised. Call init_mcp() first.")
+        self._real.run(**kwargs)
+
+
+mcp = _LazyMCP()
 
 _staging: StagingManager | None = None
 _path: Path | None = None
@@ -63,11 +105,15 @@ _path: Path | None = None
 def init_mcp(alter_file_path: Path) -> None:
     """Initialise the MCP server with a .alter file path.
 
-    Called by the CLI before ``mcp.run()``.
+    Called by the CLI before ``mcp.run()``.  This is also where FastMCP is
+    imported — the deferred import means projects with ``mcp<1.2.0`` can still
+    run ``alter canvas`` without a crash.
     """
     global _staging, _path
     _path = alter_file_path
     _staging = StagingManager(alter_file_path)
+    from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
+    mcp._init_real(FastMCP("Alter"))
 
 
 def _get_staging() -> StagingManager:
