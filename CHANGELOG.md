@@ -104,6 +104,14 @@ All notable changes to Alter are documented here.
   *surgical patcher* (`_rebuild_field_line`), which always preserves the
   existing kwarg order — so repeated applies produce no spurious diffs.
 
+- **Mutable defaults corrected to `default_factory`** — `alter apply` rewrites
+  `default={}` as `default_factory=dict` and `default=[]` as
+  `default_factory=list`. This is intentional: mutable default arguments are a
+  well-known Python antipattern where the same object is shared across all
+  instances, causing subtle state-leak bugs. The corrected form is always safe
+  and idiomatic. There is no option to preserve the original style, as doing so
+  would mean round-tripping a known bug.
+
 ### Documentation
 
 - README: added `uv tool install alterdb` as a recommended workaround when
