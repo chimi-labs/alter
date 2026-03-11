@@ -45,7 +45,26 @@ def _python_type(col: Column, enum_names: set[str]) -> str:
 
 
 def _field_args(col: Column, enum_names: set[str]) -> str:
-    """Return the Field() argument list (comma-separated, no outer parens)."""
+    """Return the Field() argument list (comma-separated, no outer parens).
+
+    Canonical kwarg order (intentional — see design note below):
+      1. primary_key
+      2. default / default_factory
+      3. foreign_key
+      4. unique
+      5. index
+      6. max_length
+      7. extra passthrough kwargs (sa_column, regex, ge/le, …)
+
+    Design note — kwarg order normalisation:
+      ``_field_args`` is used when *generating* a Field() from scratch (full
+      file generation or appending a brand-new class).  For *surgical updates*
+      of existing fields, ``_rebuild_field_line`` in ``_surgical.py`` is used
+      instead and always preserves the original kwarg order.  Therefore the
+      only time this canonical order becomes visible in a diff is when a model
+      file is created from scratch or a completely new class is appended — a
+      deliberate normalisation, not a bug.
+    """
     args: list[str] = []
 
     if col.primary_key:

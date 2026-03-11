@@ -90,6 +90,20 @@ All notable changes to Alter are documented here.
 - New `json_array` alter type for bare `list` / `List` annotations. Columns typed as
   `Optional[list]` now round-trip correctly instead of becoming `Optional[dict]`.
 
+### Known behaviour
+
+- **`Field()` kwarg order normalised on first generation** — when `alter apply`
+  writes a model file for the first time (or appends a brand-new class to an
+  existing file), the generator emits `Field()` kwargs in a canonical order:
+  `primary_key`, `default`/`default_factory`, `foreign_key`, `unique`, `index`,
+  `max_length`, then any passthrough kwargs.  This is intentional: a freshly
+  generated file is consistent and readable regardless of how the kwargs were
+  ordered in an earlier hand-written version.
+
+  Subsequent runs of `alter apply` that only modify individual fields use the
+  *surgical patcher* (`_rebuild_field_line`), which always preserves the
+  existing kwarg order — so repeated applies produce no spurious diffs.
+
 ### Documentation
 
 - README: added `uv tool install alterdb` as a recommended workaround when
