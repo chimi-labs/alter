@@ -211,7 +211,9 @@ class SQLModelParser(BaseParser):
                 all_warnings.append(f"Unexpected error parsing {py_file}: {exc}")
                 skipped.append(py_file)
 
-        # Add global enums not already in schema (e.g. from enum-only files)
+        # Add global enums not already in schema (e.g. from enum-only files).
+        # The post-filter below will remove any that are not actually referenced
+        # by a table column, so it is safe to add them all here first.
         existing_enum_names = {e.name for e in schema.enums}
         for enum_def in global_enums.values():
             if enum_def.name not in existing_enum_names:
@@ -219,6 +221,16 @@ class SQLModelParser(BaseParser):
 
         from alter.parsers.base import deduplicate_tables  # avoid circular at top level
         schema.tables = deduplicate_tables(schema.tables, all_warnings)
+
+        # Post-filter: only keep enums that are actually referenced by at least
+        # one column in a parsed table.  This removes enums swept up from DTO
+        # files, Pydantic-only models, and utility scripts that share a directory
+        # with the real SQLModel models.
+        referenced_types: set[str] = {
+            col.type for table in schema.tables for col in table.columns
+        }
+        schema.enums = [e for e in schema.enums if e.name in referenced_types]
+
         return ParseResult(schema=schema, warnings=all_warnings, skipped_files=skipped)
 
     # ------------------------------------------------------------------
@@ -443,7 +455,13 @@ def _extract_base_class_columns(
         try:
             alter_type, is_optional = _resolve_annotation(annotation, known_enums)
         except Exception:  # noqa: BLE001
-            continue  # skip unresolvable
+            _warnings_module.warn(
+                f"alterdb: could not resolve type for base-class field "
+                f"'{node.name}.{field_name}' — column skipped. "
+                "Consider using a supported type or sa_column=Column(JSON).",
+                stacklevel=2,
+            )
+            continue
 
         if alter_type == "_relationship":
             continue
@@ -467,10 +485,18 @@ def _get_tablename(node: ast.ClassDef) -> str:
 
 
 def _get_table_schema(node: ast.ClassDef) -> str | None:
-    """Return the schema name from ``__table_args__ = {"schema": "..."}`` or None.
+    """Return the schema name from ``__table_args__`` or None.
 
-    Handles both plain dicts and dicts with extra keys (e.g. constraints).
-    Only the ``"schema"`` key is extracted.
+    Handles both forms of ``__table_args__``:
+
+    * **Plain dict** — ``__table_args__ = {"schema": "myschema"}``
+    * **Tuple** — ``__table_args__ = (Index(...), {"schema": "myschema"})``
+
+    SQLAlchemy/SQLModel convention: when the tuple form is used (required for
+    combining ``Index`` / ``UniqueConstraint`` objects with keyword options),
+    the *last* element of the tuple must be a plain dict of table-level kwargs
+    (including ``"schema"``).  We scan from the end and use the first dict
+    found.
     """
     for stmt in node.body:
         if not isinstance(stmt, ast.Assign):
@@ -479,9 +505,24 @@ def _get_table_schema(node: ast.ClassDef) -> str | None:
             if not (isinstance(target, ast.Name) and target.id == "__table_args__"):
                 continue
             value = stmt.value
-            if not isinstance(value, ast.Dict):
+
+            # Resolve the options dict: either the value itself (plain dict)
+            # or the last ast.Dict element inside a tuple.
+            if isinstance(value, ast.Dict):
+                options_dict: ast.Dict | None = value
+            elif isinstance(value, ast.Tuple):
+                options_dict = None
+                for elt in reversed(value.elts):
+                    if isinstance(elt, ast.Dict):
+                        options_dict = elt
+                        break
+            else:
                 continue
-            for key, val in zip(value.keys, value.values):
+
+            if options_dict is None:
+                continue
+
+            for key, val in zip(options_dict.keys, options_dict.values):
                 if (
                     isinstance(key, ast.Constant)
                     and key.value == "schema"
@@ -623,14 +664,54 @@ def _is_relationship_call(value: ast.expr) -> bool:
 
 
 def _annotation_is_list(annotation: ast.expr) -> bool:
-    """Return True if the type annotation is ``list[X]`` (a relationship collection)."""
+    """Return True if the annotation is a ``list[X]`` *relationship* collection.
+
+    Returns False for ``list[str]``, ``List[Any]``, ``list[dict]``, etc. —
+    those are JSON-array columns, not relationship back-references.  Only
+    ``list[ModelClass]``, ``List[ModelClass]``, and ``list["ModelClass"]``
+    (forward-ref strings) are treated as relationship collections.
+    """
     if isinstance(annotation, ast.Subscript):
         val = annotation.value
-        if isinstance(val, ast.Name) and val.id == "list":
-            return True
-        # List (capital L) from typing
-        if isinstance(val, ast.Name) and val.id == "List":
-            return True
+        if isinstance(val, ast.Name) and val.id in ("list", "List"):
+            # Only skip when the element type is a model class reference.
+            return not _is_primitive_element(annotation.slice)
+    return False
+
+
+# Names that are clearly NOT SQLModel relationship target classes. When one of
+# these appears as the element type of List[X] / list[X] the annotation means a
+# JSON array column, not a relationship back-reference.
+_LIST_PRIMITIVE_NAMES: frozenset[str] = frozenset({
+    # builtins
+    "str", "int", "float", "bool", "bytes",
+    "dict", "list", "set", "tuple",
+    "None", "NoneType", "type", "object",
+    # typing helpers
+    "Any", "Dict", "List", "Set", "Tuple",
+    "Sequence", "Mapping", "Optional", "Union",
+})
+
+
+def _is_primitive_element(node: ast.expr) -> bool:
+    """Return True if *node* is clearly a primitive/typing type, not a model class.
+
+    Used to distinguish ``List[Any]`` / ``List[str]`` (→ json_array) from
+    ``List[OrderItem]`` (→ relationship back-reference).
+
+    * An ``ast.Name`` whose id is in ``_LIST_PRIMITIVE_NAMES`` → primitive.
+    * An ``ast.Subscript`` (e.g. ``Dict[str, Any]``) → primitive (generic alias).
+    * An ``ast.Tuple`` (e.g. multi-element type params) → primitive.
+    * An ``ast.Constant`` string (forward-ref like ``"OrderItem"``) → NOT primitive
+      (it's a model forward reference).
+    * Anything else → NOT primitive (conservatively assumed to be a model class).
+    """
+    if isinstance(node, ast.Name):
+        return node.id in _LIST_PRIMITIVE_NAMES
+    if isinstance(node, (ast.Subscript, ast.Tuple)):
+        return True  # generic alias like Dict[str, Any] or multi-param tuple
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return False  # forward-ref string like "OrderItem"
     return False
 
 
@@ -654,9 +735,18 @@ def _resolve_annotation(
             inner_type, _ = _resolve_annotation(inner, known_enums)
             return inner_type, True
 
-        # list[X] / List[X] → relationship collection
+        # list[X] / List[X] — relationship collection OR json_array column.
+        # Distinguish by the element type:
+        #   List[Any], List[str], List[dict], List[Dict[...]], etc. → json_array
+        #   List["OrderItem"], List[OrderItem] (model class)        → relationship
         if isinstance(val, ast.Name) and val.id in ("list", "List"):
+            if _is_primitive_element(annotation.slice):
+                return "json_array", False
             return "_relationship", False
+
+        # Dict[K, V] → json (generic dict-like column)
+        if isinstance(val, ast.Name) and val.id in ("dict", "Dict"):
+            return "json", False
 
         # X | None (Python 3.10+, represented as BinOp in some contexts)
         # Subscript shouldn't be BinOp but handle it below

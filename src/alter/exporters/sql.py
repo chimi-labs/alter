@@ -11,6 +11,13 @@ from alter.schema import AlterSchema, Column, Relation, Table
 from alter.types import alter_to_sql
 
 
+def _qualified_name(table: Table) -> str:
+    """Return ``schema.table`` when *table* has a schema, else just ``table``."""
+    if table.schema_name:
+        return f"{table.schema_name}.{table.name}"
+    return table.name
+
+
 def export_sql(schema: AlterSchema) -> str:
     """Export *schema* as Postgres ``CREATE TABLE`` SQL DDL.
 
@@ -19,6 +26,8 @@ def export_sql(schema: AlterSchema) -> str:
     - Column type, PRIMARY KEY, NOT NULL, UNIQUE, DEFAULT
     - Table-level ``FOREIGN KEY ... REFERENCES ... ON DELETE`` constraints
       derived from the schema's ``Relation`` objects.
+    - Schema-qualified table names (``schema.table``) when ``schema_name``
+      is set on a table.
 
     Args:
         schema: The ``AlterSchema`` to export.
@@ -34,7 +43,10 @@ def export_sql(schema: AlterSchema) -> str:
     for r in schema.relations:
         rel_index.setdefault((r.from_table, r.from_column), []).append(r)
 
-    parts = [_table_to_sql(table, rel_index) for table in schema.tables]
+    # Build table lookup by name so FK REFERENCES can use the qualified name.
+    table_by_name: dict[str, Table] = {t.name: t for t in schema.tables}
+
+    parts = [_table_to_sql(table, rel_index, table_by_name) for table in schema.tables]
     if not parts:
         return ""
     return "\n\n".join(parts) + "\n"
@@ -46,7 +58,9 @@ def export_sql(schema: AlterSchema) -> str:
 
 
 def _table_to_sql(
-    table: Table, rel_index: dict[tuple[str, str], list[Relation]]
+    table: Table,
+    rel_index: dict[tuple[str, str], list[Relation]],
+    table_by_name: dict[str, Table] | None = None,
 ) -> str:
     """Render one ``CREATE TABLE`` statement."""
     pk_cols = [c.name for c in table.columns if c.primary_key]
@@ -60,9 +74,12 @@ def _table_to_sql(
 
         for rel in rel_index.get((table.name, col.name), []):
             on_del = f" ON DELETE {rel.on_delete}" if rel.on_delete else ""
+            # Use the qualified name of the referenced table when available.
+            ref_table_obj = (table_by_name or {}).get(rel.to_table)
+            ref_name = _qualified_name(ref_table_obj) if ref_table_obj else rel.to_table
             fk_lines.append(
                 f"    FOREIGN KEY ({col.name})"
-                f" REFERENCES {rel.to_table} ({rel.to_column})"
+                f" REFERENCES {ref_name} ({rel.to_column})"
                 f"{on_del}"
             )
 
@@ -71,7 +88,7 @@ def _table_to_sql(
 
     all_defs = col_lines + fk_lines
     body = ",\n".join(all_defs)
-    return f"CREATE TABLE {table.name} (\n{body}\n);"
+    return f"CREATE TABLE {_qualified_name(table)} (\n{body}\n);"
 
 
 def _column_to_sql(col: Column, inline_pk: bool = True) -> str:

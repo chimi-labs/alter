@@ -769,10 +769,18 @@ def _get_tablename_value(node: ast.ClassDef) -> str | None:
 
 
 def _get_table_schema(node: ast.ClassDef) -> str | None:
-    """Return the schema name from ``__table_args__ = {"schema": "..."}`` or None.
+    """Return the schema name from ``__table_args__`` or None.
 
-    Handles both plain dicts and dicts with extra keys (e.g. constraints).
-    Only the ``"schema"`` key is extracted.
+    Handles both forms of ``__table_args__``:
+
+    * **Plain dict** — ``__table_args__ = {"schema": "myschema"}``
+    * **Tuple** — ``__table_args__ = (Index(...), {"schema": "myschema"})``
+
+    SQLAlchemy/SQLModel convention: when the tuple form is used (required for
+    combining ``Index`` / ``UniqueConstraint`` objects with keyword options),
+    the *last* element of the tuple must be a plain dict of table-level kwargs
+    (including ``"schema"``).  We scan from the end and use the first dict
+    found.
     """
     for stmt in node.body:
         if not isinstance(stmt, ast.Assign):
@@ -781,9 +789,24 @@ def _get_table_schema(node: ast.ClassDef) -> str | None:
             if not (isinstance(target, ast.Name) and target.id == "__table_args__"):
                 continue
             value = stmt.value
-            if not isinstance(value, ast.Dict):
+
+            # Resolve the options dict: either the value itself (plain dict)
+            # or the last ast.Dict element inside a tuple.
+            if isinstance(value, ast.Dict):
+                options_dict: ast.Dict | None = value
+            elif isinstance(value, ast.Tuple):
+                options_dict = None
+                for elt in reversed(value.elts):
+                    if isinstance(elt, ast.Dict):
+                        options_dict = elt
+                        break
+            else:
                 continue
-            for key, val in zip(value.keys, value.values):
+
+            if options_dict is None:
+                continue
+
+            for key, val in zip(options_dict.keys, options_dict.values):
                 if (
                     isinstance(key, ast.Constant)
                     and key.value == "schema"

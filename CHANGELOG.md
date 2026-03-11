@@ -6,6 +6,87 @@ All notable changes to Alter are documented here.
 
 ### Fixed
 
+#### Unreferenced enums from DTO / Pydantic / utility files collected into `schema.alter`
+
+- **`alter init` swept up every `Enum` subclass it found**, including enums from
+  DTO files, Pydantic-only models, and utility scripts that share a directory
+  with the real SQLModel models. These spurious enums cluttered `schema.alter`
+  and appeared in Mermaid and SQL exports.
+
+  Fix: `parse_directory` now post-filters `schema.enums` after all phases
+  complete. Only enums whose name matches at least one `col.type` across all
+  parsed SQLModel table columns are kept. Enums that are defined in the scanned
+  tree but never referenced by any column are silently discarded.
+
+#### `Optional[List[Any]]` columns silently dropped by SQLModel parser
+
+- **Column annotated as `Optional[List[Any]]` was absent from `schema.alter`**
+  with no warning — the parser treated every `List[X]` / `list[X]` subscript as
+  a relationship back-reference and skipped it, regardless of the element type.
+
+  Fix: added `_is_primitive_element()` which returns `True` for builtin and
+  `typing` primitive names (`Any`, `str`, `int`, `dict`, `Dict[K,V]`, etc.).
+
+  - `_resolve_annotation` now returns `"json_array"` for `List[primitive]` and
+    `"_relationship"` only when the element type is a model class or forward-ref
+    string. Also handles `Dict[K, V]` → `"json"`.
+  - `_annotation_is_list` (early-exit guard) now passes `list[primitive]`
+    annotations through to `_resolve_annotation` instead of silently dropping
+    them — so bare `list[Any]` / `list[str]` etc. are no longer lost even
+    without an `Optional` wrapper.
+  - `_extract_base_class_columns` now emits a `warnings.warn` instead of
+    silently skipping columns with truly unresolvable type annotations.
+
+#### `alter validate` rejected schema-qualified foreign keys as format errors
+
+- **`alter validate` exited with code 1 for every schema-qualified FK** — the
+  validator checked the raw `foreign_key` string against a strict two-part
+  `table.column` regex, so columns declared as
+  `Field(foreign_key="myschema.orders.id")` produced spurious errors like:
+  > Foreign key 'myschema.orders.id' must be in 'table.column' format
+
+  The parser handled these FKs correctly (resolves relations, builds DDL), so
+  `alter export` and `alter diff` worked fine — only `alter validate` was broken.
+
+  Fix: added `_parse_fk_reference(fk)` which returns `(schema, table, column)`
+  for both `"table.column"` and `"schema.table.column"` forms. The validator now
+  accepts both, resolves the referenced table by bare name (stripping the schema
+  prefix), and updates the format-error message to describe both valid forms.
+
+#### SQL exporter ignored `schema_name` — `CREATE TABLE` omitted schema prefix
+
+- **`CREATE TABLE orders` instead of `CREATE TABLE myschema.orders`** — the SQL
+  DDL exporter built table name strings from `table.name` only and never read
+  `table.schema_name`, so all exported DDL was unqualified even when the `.alter`
+  file had the correct schema set. `FOREIGN KEY … REFERENCES` clauses were
+  similarly unqualified.
+
+  Fix: added a `_qualified_name(table)` helper in `exporters/sql.py` that returns
+  `schema.table` when `schema_name` is set. Applied to the `CREATE TABLE` header
+  and every `REFERENCES` target in `FOREIGN KEY` constraints (resolved via a
+  `table_by_name` lookup so cross-schema references are always correct).
+
+  Also fixed `exporters/mermaid.py`: tables with a `schema_name` now use a
+  `schema_table` identifier (underscore-joined, valid Mermaid syntax) so that
+  multi-schema diagrams are unambiguous. Both entity blocks and relation lines
+  use the qualified name consistently. Tables without a schema are unaffected.
+
+#### `schema_name` not extracted when `__table_args__` is a tuple
+
+- **Tuple form of `__table_args__` lost the schema name** — SQLAlchemy/SQLModel
+  requires the tuple form when combining `Index` or `UniqueConstraint` objects
+  with table-level keyword options:
+  ```python
+  __table_args__ = (Index("ix_foo", "col"), {"schema": "myschema"})
+  ```
+  The parser only handled the plain-dict form, so any model using the tuple form
+  got `schema_name=None` and lost its PostgreSQL schema on the next `alter apply`.
+
+  Fix: `_get_table_schema` in both the SQLModel and SQLAlchemy parsers now
+  handles `ast.Tuple` nodes by scanning elements in reverse and using the first
+  `ast.Dict` found as the options dict (matching SQLAlchemy's own convention that
+  the last tuple element must be the keyword-options dict).
+
 #### `sa_column=Column(JSON)` type ignored by parser (Fix 10)
 
 - **`Optional[str]` with `sa_column=Column(JSON)` stored as type `"string"`** — the SQLModel
@@ -133,6 +214,12 @@ All notable changes to Alter are documented here.
   `.alter` files with plain-string values are automatically migrated on load.
 
 ### Added
+
+- **`import alterdb` compatibility shim** — `pip install alterdb` now makes both
+  `import alterdb` and `import alter` work. A thin `alterdb/__init__.py` re-exports
+  everything from the `alter` package via `from alter import *`, following the same
+  pattern as `Pillow`/`PIL` and `scikit-learn`/`sklearn`. Existing code using
+  `import alter` is unaffected.
 
 - **`alter --version`** — the CLI now accepts a `--version` flag that prints the installed
   package version (e.g. `alterdb, version 0.1.4`) and exits. Implemented via

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from alter.schema import AlterSchema, Column, Relation, Table
-from alter.validate import ValidationIssue, validate_schema
+from alter.validate import ValidationIssue, _parse_fk_reference, validate_schema
 
 
 # ---------------------------------------------------------------------------
@@ -239,3 +239,127 @@ def test_relation_unknown_to_table_is_error():
     schema = AlterSchema(tables=[users], relations=[rel])
     errors = _issues(schema, "error")
     assert any("to_table" in i.message.lower() or "nonexistent" in i.message for i in errors)
+
+
+# ---------------------------------------------------------------------------
+# Schema-qualified foreign keys  (fix: validator must accept 'schema.table.col')
+# ---------------------------------------------------------------------------
+
+
+class TestParseFkReference:
+    """Unit tests for the _parse_fk_reference helper."""
+
+    def test_two_part_unqualified(self):
+        schema, table, col = _parse_fk_reference("users.id")
+        assert schema is None
+        assert table == "users"
+        assert col == "id"
+
+    def test_three_part_schema_qualified(self):
+        schema, table, col = _parse_fk_reference("myschema.orders.id")
+        assert schema == "myschema"
+        assert table == "orders"
+        assert col == "id"
+
+    def test_one_part_returns_empty_strings(self):
+        schema, table, col = _parse_fk_reference("no_dot")
+        assert table == ""
+        assert col == ""
+
+    def test_four_part_returns_empty_strings(self):
+        schema, table, col = _parse_fk_reference("a.b.c.d")
+        assert table == ""
+        assert col == ""
+
+
+class TestSchemaQualifiedForeignKeys:
+    """Validator must not reject schema-qualified FK strings."""
+
+    def _schema_qualified_fk_schema(self) -> AlterSchema:
+        orders = Table(
+            name="orders",
+            schema_name="myschema",
+            columns=[
+                Column(name="id", type="uuid", primary_key=True, nullable=False),
+            ],
+        )
+        order_items = Table(
+            name="order_items",
+            schema_name="myschema",
+            columns=[
+                Column(name="id", type="uuid", primary_key=True, nullable=False),
+                Column(
+                    name="order_id",
+                    type="uuid",
+                    foreign_key="myschema.orders.id",
+                    index=True,
+                ),
+            ],
+        )
+        return AlterSchema(tables=[orders, order_items])
+
+    def test_schema_qualified_fk_no_format_error(self):
+        """'schema.table.column' must not produce a format error."""
+        errors = _issues(self._schema_qualified_fk_schema(), "error")
+        format_errors = [e for e in errors if "format" in e.message.lower()]
+        assert format_errors == []
+
+    def test_schema_qualified_fk_resolved_table_found(self):
+        """Referenced table is found by bare name despite schema prefix in FK string."""
+        errors = _issues(self._schema_qualified_fk_schema(), "error")
+        unknown_errors = [e for e in errors if "unknown table" in e.message.lower()]
+        assert unknown_errors == []
+
+    def test_schema_qualified_fk_resolved_column_found(self):
+        """Referenced column is found correctly when FK is schema-qualified."""
+        errors = _issues(self._schema_qualified_fk_schema(), "error")
+        col_errors = [e for e in errors if "unknown column" in e.message.lower()]
+        assert col_errors == []
+
+    def test_schema_qualified_fk_zero_errors(self):
+        """A valid schema-qualified FK produces zero validation errors."""
+        errors = _issues(self._schema_qualified_fk_schema(), "error")
+        assert errors == []
+
+    def test_schema_qualified_fk_dangling_table_still_errors(self):
+        """A schema-qualified FK to a nonexistent table still raises an error."""
+        table = Table(
+            name="items",
+            columns=[
+                Column(name="id", type="uuid", primary_key=True, nullable=False),
+                Column(
+                    name="order_id",
+                    type="uuid",
+                    foreign_key="myschema.nonexistent_table.id",
+                ),
+            ],
+        )
+        errors = _issues(AlterSchema(tables=[table]), "error")
+        assert any("unknown table" in e.message.lower() for e in errors)
+
+    def test_unqualified_fk_still_valid(self):
+        """Existing plain 'table.column' FKs must still pass without errors."""
+        users = _valid_table("users")
+        posts = Table(
+            name="posts",
+            columns=[
+                Column(name="id", type="uuid", primary_key=True, nullable=False),
+                Column(name="user_id", type="uuid", foreign_key="users.id", index=True),
+            ],
+        )
+        errors = _issues(AlterSchema(tables=[users, posts]), "error")
+        assert errors == []
+
+    def test_error_message_mentions_both_formats(self):
+        """Format-error message must describe both valid forms."""
+        table = Table(
+            name="items",
+            columns=[
+                Column(name="id", type="uuid", primary_key=True, nullable=False),
+                Column(name="x", type="string", foreign_key="no_dot_at_all"),
+            ],
+        )
+        errors = _issues(AlterSchema(tables=[table]), "error")
+        format_errors = [e for e in errors if "format" in e.message.lower()]
+        assert format_errors
+        assert "schema.table.column" in format_errors[0].message

@@ -26,6 +26,25 @@ class ValidationIssue:
     column: str | None = None
 
 
+def _parse_fk_reference(fk: str) -> tuple[str | None, str, str]:
+    """Parse a ``foreign_key`` string into ``(schema, table, column)``.
+
+    Accepts both forms used by SQLAlchemy / SQLModel:
+
+    * ``"table.column"``         → ``(None, "table", "column")``
+    * ``"schema.table.column"``  → ``("schema", "table", "column")``
+
+    Returns ``(None, "", "")`` for any other format (triggers a format error
+    in the caller).
+    """
+    parts = fk.split(".")
+    if len(parts) == 2:
+        return None, parts[0], parts[1]
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    return None, "", ""
+
+
 def validate_schema(schema: AlterSchema) -> list[ValidationIssue]:
     """Return all validation issues found in *schema*.
 
@@ -87,17 +106,17 @@ def validate_schema(schema: AlterSchema) -> list[ValidationIssue]:
 
             # Dangling foreign key reference
             if col.foreign_key:
-                parts = col.foreign_key.split(".")
-                if len(parts) != 2:
+                _fk_schema, ref_table, ref_col = _parse_fk_reference(col.foreign_key)
+                if not ref_table or not ref_col:
                     issues.append(ValidationIssue(
                         severity="error", table=table.name, column=col.name,
                         message=(
                             f"Foreign key '{col.foreign_key}' must be in "
-                            f"'table.column' format"
+                            f"'table.column' or 'schema.table.column' format"
                         ),
                     ))
                 else:
-                    ref_table, ref_col = parts
+                    # Table lookup uses the bare table name regardless of schema prefix.
                     if ref_table not in table_names:
                         issues.append(ValidationIssue(
                             severity="error", table=table.name, column=col.name,

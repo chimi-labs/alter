@@ -214,6 +214,145 @@ class TestExportMermaid:
 
 
 # ---------------------------------------------------------------------------
+# Schema-qualified names — SQL exporter
+# ---------------------------------------------------------------------------
+
+
+def _schema_with_schema_name() -> AlterSchema:
+    """Single table with schema_name set."""
+    return AlterSchema(
+        tables=[
+            Table(
+                name="orders",
+                schema_name="sales",
+                columns=[
+                    Column(name="id", type="uuid", primary_key=True, nullable=False),
+                    Column(name="total", type="float", nullable=False),
+                ],
+            )
+        ]
+    )
+
+
+def _cross_schema_fk() -> AlterSchema:
+    """Two tables in the same schema; FK must reference qualified name."""
+    return AlterSchema(
+        tables=[
+            Table(
+                name="customers",
+                schema_name="sales",
+                columns=[
+                    Column(name="id", type="uuid", primary_key=True, nullable=False),
+                ],
+            ),
+            Table(
+                name="orders",
+                schema_name="sales",
+                columns=[
+                    Column(name="id", type="uuid", primary_key=True, nullable=False),
+                    Column(name="customer_id", type="uuid", nullable=False),
+                ],
+            ),
+        ],
+        relations=[
+            Relation(
+                name="orders_customer_fk",
+                from_table="orders",
+                from_column="customer_id",
+                to_table="customers",
+                to_column="id",
+            )
+        ],
+    )
+
+
+class TestExportSqlSchemaQualified:
+    def test_create_table_uses_qualified_name(self):
+        sql = export_sql(_schema_with_schema_name())
+        assert "CREATE TABLE sales.orders" in sql
+
+    def test_no_schema_unaffected(self):
+        """Tables without schema_name keep plain unqualified names."""
+        sql = export_sql(_simple_schema())
+        assert "CREATE TABLE users" in sql
+        assert "." not in sql.split("CREATE TABLE")[1].split("(")[0].strip()
+
+    def test_fk_references_qualified_name(self):
+        sql = export_sql(_cross_schema_fk())
+        assert "REFERENCES sales.customers" in sql
+
+    def test_both_tables_qualified(self):
+        sql = export_sql(_cross_schema_fk())
+        assert "CREATE TABLE sales.customers" in sql
+        assert "CREATE TABLE sales.orders" in sql
+
+    def test_mixed_schema_and_no_schema(self):
+        """FK from schemaless table to schema table — reference is qualified."""
+        schema = AlterSchema(
+            tables=[
+                Table(
+                    name="users",
+                    columns=[
+                        Column(name="id", type="uuid", primary_key=True, nullable=False),
+                    ],
+                ),
+                Table(
+                    name="events",
+                    schema_name="analytics",
+                    columns=[
+                        Column(name="id", type="uuid", primary_key=True, nullable=False),
+                        Column(name="user_id", type="uuid", nullable=False),
+                    ],
+                ),
+            ],
+            relations=[
+                Relation(
+                    name="events_user_fk",
+                    from_table="events",
+                    from_column="user_id",
+                    to_table="users",
+                    to_column="id",
+                )
+            ],
+        )
+        sql = export_sql(schema)
+        assert "CREATE TABLE analytics.events" in sql
+        assert "CREATE TABLE users" in sql
+        # FK references the unqualified table (no schema on users)
+        assert "REFERENCES users (id)" in sql
+
+
+# ---------------------------------------------------------------------------
+# Schema-qualified names — Mermaid exporter
+# ---------------------------------------------------------------------------
+
+
+class TestExportMermaidSchemaQualified:
+    def test_entity_name_uses_schema_prefix(self):
+        mermaid = export_mermaid(_schema_with_schema_name())
+        assert "sales_orders {" in mermaid
+
+    def test_no_schema_entity_name_unchanged(self):
+        mermaid = export_mermaid(_simple_schema())
+        assert "users {" in mermaid
+
+    def test_relation_lines_use_qualified_names(self):
+        mermaid = export_mermaid(_cross_schema_fk())
+        # Both ends of the relation should use the schema-prefixed names.
+        assert "sales_orders" in mermaid
+        assert "sales_customers" in mermaid
+        # The relation line itself must reference the qualified identifiers.
+        lines = mermaid.splitlines()
+        rel_lines = [l for l in lines if "||" in l or "}o" in l or "o{" in l]
+        assert any("sales_orders" in l and "sales_customers" in l for l in rel_lines)
+
+    def test_entity_block_columns_intact(self):
+        mermaid = export_mermaid(_schema_with_schema_name())
+        assert "id" in mermaid
+        assert "total" in mermaid
+
+
+# ---------------------------------------------------------------------------
 # Round-trip: schema → SQL → import → check structure
 # ---------------------------------------------------------------------------
 
