@@ -8,12 +8,18 @@ Python source code.  Supports the same three modes as the SQLModel generator:
 from __future__ import annotations
 
 import ast
-import difflib
 from pathlib import Path
 
 from alter.generators._surgical import surgical_update_class, surgical_update_enum_class
 
-from alter.generators.base import BaseGenerator, _default_model_path
+from alter.generators.base import (
+    BaseGenerator,
+    _class_name,
+    _collect_stdlib_imports,
+    _default_model_path,
+    _safe_member_name,
+    generate_enum_class,
+)
 from alter.schema import AlterSchema, Column, EnumDef, Table
 from alter.types import alter_to_python, alter_to_sql, is_enum_type
 
@@ -41,12 +47,8 @@ _SQLA_TYPE: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# SQLAlchemy-specific column helpers
 # ---------------------------------------------------------------------------
-
-
-def _class_name(table_name: str) -> str:
-    return "".join(w.capitalize() for w in table_name.split("_"))
 
 
 def _mapped_type(col: Column, enum_names: set[str]) -> str:
@@ -135,20 +137,6 @@ def _column_line(col: Column, enum_names: set[str]) -> str:
     return f"    {col.name}: Mapped[{mapped_t}] = mapped_column({mc_args})"
 
 
-def _enum_class_source(enum: EnumDef) -> str:
-    import keyword
-    from alter.schema import EnumMember
-    lines = [f"class {enum.name}(str, Enum):"]
-    for v in enum.values:
-        if isinstance(v, EnumMember):
-            mname = f"{v.member_name}_" if keyword.iskeyword(v.member_name) else v.member_name
-            lines.append(f'    {mname} = "{v.value}"')
-        else:
-            mname = f"{v}_" if keyword.iskeyword(v) else v
-            lines.append(f'    {mname} = "{v}"')
-    return "\n".join(lines)
-
-
 def _model_class_source(
     table: Table,
     enum_names: set[str],
@@ -189,141 +177,6 @@ def _collect_sa_type_imports(schema: AlterSchema, enum_names: set[str]) -> set[s
     return names
 
 
-def _imported_names(tree: ast.Module) -> set[str]:
-    """Return the set of all names made available by import statements in *tree*."""
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                names.add(alias.asname if alias.asname else alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                names.add(alias.asname if alias.asname else alias.name)
-    return names
-
-
-def _missing_imports(
-    schema: AlterSchema,
-    enum_names: set[str],
-    tree: ast.Module,
-    emit_enum_names: set[str] | None = None,
-) -> list[str]:
-    """Return import lines that are needed but not yet present in the parsed file."""
-    present = _imported_names(tree)
-    needed = _build_imports(schema, enum_names, emit_enum_names=emit_enum_names)
-    missing: list[str] = []
-    for line in needed:
-        try:
-            line_tree = ast.parse(line)
-        except SyntaxError:
-            continue
-        line_names: set[str] = set()
-        for node in ast.walk(line_tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    line_names.add(alias.asname if alias.asname else alias.name.split(".")[0])
-            elif isinstance(node, ast.ImportFrom):
-                for alias in node.names:
-                    line_names.add(alias.asname if alias.asname else alias.name)
-        if not line_names.issubset(present):
-            missing.append(line)
-    return missing
-
-
-def _ensure_imports(
-    code: str,
-    schema: AlterSchema,
-    enum_names: set[str],
-    emit_enum_names: set[str] | None = None,
-) -> str:
-    """Insert any missing import lines immediately after the last existing import."""
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code
-
-    missing = _missing_imports(schema, enum_names, tree, emit_enum_names=emit_enum_names)
-    if not missing:
-        return code
-
-    import_nodes = [
-        n for n in ast.walk(tree)
-        if isinstance(n, (ast.Import, ast.ImportFrom))
-    ]
-    lines = code.splitlines(keepends=True)
-    if import_nodes:
-        insert_after = max(
-            getattr(n, "end_lineno", None) or n.lineno for n in import_nodes
-        )
-        lines.insert(insert_after, "\n".join(missing) + "\n")
-    else:
-        lines.insert(0, "\n".join(missing) + "\n")
-
-    return "".join(lines)
-
-
-def _build_imports(
-    schema: AlterSchema,
-    enum_names: set[str],
-    emit_enum_names: set[str] | None = None,
-) -> list[str]:
-    """Return ordered import lines required by *schema*.
-
-    Args:
-        enum_names: All known enum names for type-hint resolution.
-        emit_enum_names: If provided, only add ``from enum import Enum`` when
-            this set is non-empty.  Defaults to *enum_names* when ``None``.
-    """
-    if emit_enum_names is None:
-        emit_enum_names = enum_names
-
-    needs_uuid = False
-    datetime_names: set[str] = set()
-    needs_timezone = False
-    needs_optional = False
-    needs_decimal = False
-
-    for table in schema.tables:
-        for col in table.columns:
-            py = alter_to_python(col.type) if col.type not in enum_names else col.type
-            if "uuid" in py.lower():
-                needs_uuid = True
-            if py in ("datetime", "date", "time"):
-                datetime_names.add(py)
-            if col.default == "utcnow":
-                datetime_names.add("datetime")
-                needs_timezone = True
-            if col.nullable and not col.primary_key:
-                needs_optional = True
-            if py == "Decimal":
-                needs_decimal = True
-
-    lines: list[str] = []
-    if needs_uuid:
-        lines.append("import uuid")
-    if datetime_names:
-        dt_imports = sorted(datetime_names)
-        if needs_timezone:
-            dt_imports = sorted(set(dt_imports) | {"timezone"})
-        lines.append(f"from datetime import {', '.join(dt_imports)}")
-    if emit_enum_names:
-        lines.append("from enum import Enum")
-    if needs_decimal:
-        lines.append("from decimal import Decimal")
-    if needs_optional:
-        lines.append("from typing import Optional")
-
-    sa_types = _collect_sa_type_imports(schema, enum_names)
-    if sa_types:
-        sorted_types = ", ".join(sorted(sa_types))
-        lines.append(f"from sqlalchemy import {sorted_types}")
-
-    orm_imports = ["DeclarativeBase", "Mapped", "mapped_column"]
-    lines.append(f"from sqlalchemy.orm import {', '.join(orm_imports)}")
-
-    return lines
-
-
 # ---------------------------------------------------------------------------
 # SQLAlchemyGenerator
 # ---------------------------------------------------------------------------
@@ -331,6 +184,35 @@ def _build_imports(
 
 class SQLAlchemyGenerator(BaseGenerator):
     """Generates SQLAlchemy 2.0 Python source code from an ``AlterSchema``."""
+
+    # ------------------------------------------------------------------
+    # ORM-specific imports
+    # ------------------------------------------------------------------
+
+    def _build_imports(
+        self,
+        schema: AlterSchema,
+        enum_names: set[str],
+        emit_enum_names: set[str] | None = None,
+    ) -> list[str]:
+        """Return ordered import lines required by *schema*.
+
+        Args:
+            enum_names: All known enum names for type-hint resolution.
+            emit_enum_names: If provided, only add ``from enum import Enum`` when
+                this set is non-empty.  Defaults to *enum_names* when ``None``.
+        """
+        lines = _collect_stdlib_imports(schema, enum_names, emit_enum_names)
+
+        sa_types = _collect_sa_type_imports(schema, enum_names)
+        if sa_types:
+            sorted_types = ", ".join(sorted(sa_types))
+            lines.append(f"from sqlalchemy import {sorted_types}")
+
+        orm_imports = ["DeclarativeBase", "Mapped", "mapped_column"]
+        lines.append(f"from sqlalchemy.orm import {', '.join(orm_imports)}")
+
+        return lines
 
     # ------------------------------------------------------------------
     # 1. Full generation
@@ -352,7 +234,7 @@ class SQLAlchemyGenerator(BaseGenerator):
         emit_enum_names = local_enum_names if local_enum_names is not None else all_enum_names
         parts: list[str] = []
 
-        import_lines = _build_imports(schema, all_enum_names, emit_enum_names=emit_enum_names)
+        import_lines = self._build_imports(schema, all_enum_names, emit_enum_names=emit_enum_names)
         parts.append("\n".join(import_lines))
 
         # Base class declaration
@@ -360,7 +242,7 @@ class SQLAlchemyGenerator(BaseGenerator):
 
         for enum in schema.enums:
             if enum.name in emit_enum_names:
-                parts.append(_enum_class_source(enum))
+                parts.append(generate_enum_class(enum))
 
         for table in schema.tables:
             parts.append(_model_class_source(table, all_enum_names))
@@ -445,15 +327,14 @@ class SQLAlchemyGenerator(BaseGenerator):
                 replacements.append((start, end, patched))
             else:
                 # Enum class: surgical update preserves docstrings / comments
-                import keyword
                 from alter.schema import EnumMember
                 schema_value_lines = []
                 for v in enum_by_class[cls_name].values:
                     if isinstance(v, EnumMember):
-                        mname = f"{v.member_name}_" if keyword.iskeyword(v.member_name) else v.member_name
+                        mname = _safe_member_name(v.member_name)
                         schema_value_lines.append(f'    {mname} = "{v.value}"')
                     else:
-                        mname = f"{v}_" if keyword.iskeyword(v) else v
+                        mname = _safe_member_name(v)
                         schema_value_lines.append(f'    {mname} = "{v}"')
                 class_source = "".join(lines[start - 1 : end])
                 patched = surgical_update_enum_class(class_source, schema_value_lines)
@@ -473,60 +354,15 @@ class SQLAlchemyGenerator(BaseGenerator):
                     table_by_class[cls_name], all_enum_names, class_name=cls_name
                 )
             else:
-                new_src = _enum_class_source(enum_by_class[cls_name])
+                new_src = generate_enum_class(enum_by_class[cls_name])
 
             if not result.endswith("\n\n"):
                 result = result.rstrip("\n") + "\n\n"
             result += new_src + "\n"
 
         # Ensure all imports needed by the (possibly updated) schema are present.
-        result = _ensure_imports(result, schema, all_enum_names, emit_enum_names=emit_enum_names)
+        result = self._insert_missing_imports(
+            result, schema, all_enum_names, emit_enum_names=emit_enum_names
+        )
 
         return result
-
-    # ------------------------------------------------------------------
-    # 3. Preview (dry-run diff)
-    # ------------------------------------------------------------------
-
-    def preview_apply(self, schema: AlterSchema, project_root: Path) -> str:
-        """Return unified diff of all files that WOULD change. Writes nothing."""
-        file_tables: dict[str, list[Table]] = {}
-        for table in schema.tables:
-            fp = table.file_path or _default_model_path(schema, project_root)
-            file_tables.setdefault(fp, []).append(table)
-
-        diffs: list[str] = []
-        for rel_path, tables in file_tables.items():
-            abs_path = project_root / rel_path
-            # Only define enum classes that are owned by this file
-            local_enum_names = {
-                e.name for e in schema.enums
-                if e.file_path is None or e.file_path == rel_path
-            }
-            sub = AlterSchema(
-                version=schema.version,
-                orm=schema.orm,
-                dialect=schema.dialect,
-                tables=tables,
-                enums=schema.enums,
-                relations=schema.relations,
-            )
-            if abs_path.exists():
-                existing = abs_path.read_text(encoding="utf-8")
-                updated = self.update_models(sub, existing, local_enum_names=local_enum_names)
-            else:
-                existing = ""
-                updated = self.generate_models(sub, local_enum_names=local_enum_names)
-
-            if updated == existing:
-                continue
-
-            diff = difflib.unified_diff(
-                existing.splitlines(keepends=True),
-                updated.splitlines(keepends=True),
-                fromfile=f"a/{rel_path}",
-                tofile=f"b/{rel_path}",
-            )
-            diffs.append("".join(diff))
-
-        return "".join(diffs)

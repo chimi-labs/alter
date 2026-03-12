@@ -8,34 +8,27 @@ from __future__ import annotations
 
 import ast
 import warnings as _warnings_module
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from alter.errors import ParseError
 from alter.parsers.base import (
     BaseParser,
-    ImportInfo,
     ParseResult,
+    _FileResult,
+    _const_bool,
+    _get_table_schema,
+    _is_enum_class,
+    _make_relation,
+    _node_to_type_str,
+    _parse_enum_class,
+    deduplicate_tables,
     extract_imports,
     iter_py_files,
     resolve_module_to_path,
 )
 from alter.schema import AlterSchema, Column, EnumDef, Relation, Table
 from alter.types import python_to_alter
-
-
-# ---------------------------------------------------------------------------
-# Internal dataclass for one-file parse results
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _FileResult:
-    tables: list[Table] = field(default_factory=list)
-    enums: list[EnumDef] = field(default_factory=list)
-    relations: list[Relation] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +138,7 @@ class SQLModelParser(BaseParser):
 
         Files with syntax errors are logged to ``ParseResult.skipped_files``.
         """
-        schema = AlterSchema(orm="sqlmodel")
+        schema = AlterSchema(orm="sqlmodel", strict=False)
         all_warnings: list[str] = []
         skipped: list[Path] = []
 
@@ -157,21 +150,7 @@ class SQLModelParser(BaseParser):
         # ------------------------------------------------------------------
         # Phase 1a — collect all enum definitions from every .py file
         # ------------------------------------------------------------------
-        global_enums: dict[str, EnumDef] = {}
-        parsed_trees: dict[Path, ast.Module] = {}
-
-        for py_file in py_files:
-            try:
-                source = py_file.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=str(py_file))
-                parsed_trees[py_file] = tree
-                fp = self._relative_path(py_file)
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.ClassDef) and _is_enum_class(node):
-                        enum_def = _parse_enum_class(node, file_path=fp)
-                        global_enums.setdefault(node.name, enum_def)
-            except Exception:  # noqa: BLE001
-                pass  # syntax errors handled in Phase 2
+        global_enums, parsed_trees = self._phase1_collect_enums(py_files)
 
         # ------------------------------------------------------------------
         # Phase 1b — collect non-table SQLModel base classes (with enums)
@@ -219,7 +198,6 @@ class SQLModelParser(BaseParser):
             if enum_def.name not in existing_enum_names:
                 schema.enums.append(enum_def)
 
-        from alter.parsers.base import deduplicate_tables  # avoid circular at top level
         schema.tables = deduplicate_tables(schema.tables, all_warnings)
 
         # Post-filter: only keep enums that are actually referenced by at least
@@ -237,16 +215,6 @@ class SQLModelParser(BaseParser):
     # Internal implementation
     # ------------------------------------------------------------------
 
-    def _search_roots(self, path: Path) -> list[Path]:
-        """Return candidate package root directories for resolving imports."""
-        if self.project_root is not None:
-            return [self.project_root]
-        # Heuristic: walk up until we leave a Python package (no __init__.py)
-        curr = path.parent
-        while (curr / "__init__.py").exists() and curr != curr.parent:
-            curr = curr.parent
-        return [curr, path.parent]
-
     def _resolve_imports(
         self, path: Path, search_roots: list[Path]
     ) -> tuple[dict[str, EnumDef], dict[str, list[Column]]]:
@@ -256,42 +224,7 @@ class SQLModelParser(BaseParser):
         set).  Two sub-passes are performed so that enums are available when
         base-class column types are resolved.
         """
-        visited: set[Path] = {path.resolve()}
-        # Map from dep_path → (dep_file_path_str, parsed_tree)
-        deps: list[tuple[Path, str, ast.Module]] = []
-        queue: list[Path] = []
-
-        # Seed the queue with direct imports of *path*
-        try:
-            src = path.read_text(encoding="utf-8")
-            tree = ast.parse(src)
-            for imp in extract_imports(tree):
-                dep = resolve_module_to_path(imp.module, search_roots, path, imp.level)
-                if dep is not None and dep.resolve() not in visited:
-                    queue.append(dep)
-        except Exception:  # noqa: BLE001
-            return {}, {}
-
-        while queue:
-            dep_path = queue.pop(0)
-            dep_resolved = dep_path.resolve()
-            if dep_resolved in visited:
-                continue
-            visited.add(dep_resolved)
-            try:
-                dep_src = dep_path.read_text(encoding="utf-8")
-                dep_tree = ast.parse(dep_src)
-                dep_fp = self._relative_path(dep_path)
-                deps.append((dep_path, dep_fp, dep_tree))
-                # Follow transitive imports
-                for imp in extract_imports(dep_tree):
-                    tdep = resolve_module_to_path(
-                        imp.module, search_roots, dep_path, imp.level
-                    )
-                    if tdep is not None and tdep.resolve() not in visited:
-                        queue.append(tdep)
-            except Exception:  # noqa: BLE001
-                pass
+        deps = self._collect_import_deps(path, search_roots)
 
         # Sub-pass A: collect enums (with file_path)
         ext_enums: dict[str, EnumDef] = {}
@@ -369,18 +302,8 @@ class SQLModelParser(BaseParser):
 
 
 # ---------------------------------------------------------------------------
-# AST helper functions
+# AST helper functions — SQLModel-specific
 # ---------------------------------------------------------------------------
-
-
-def _is_enum_class(node: ast.ClassDef) -> bool:
-    """Return True if the class inherits from Enum (or a str+Enum combo)."""
-    for base in node.bases:
-        if isinstance(base, ast.Name) and base.id == "Enum":
-            return True
-        if isinstance(base, ast.Attribute) and base.attr == "Enum":
-            return True
-    return False
 
 
 def _is_sqlmodel_table(node: ast.ClassDef) -> bool:
@@ -410,25 +333,6 @@ def _is_sqlmodel_base_class(node: ast.ClassDef) -> bool:
         if name == "SQLModel":
             return True
     return False
-
-
-def _parse_enum_class(node: ast.ClassDef, file_path: str | None = None) -> EnumDef:
-    """Extract enum name, member names, and values."""
-    from alter.schema import EnumMember
-    values: list[EnumMember] = []
-    for stmt in node.body:
-        if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                if isinstance(target, ast.Name):
-                    member_name = target.id
-                    if isinstance(stmt.value, ast.Constant) and isinstance(
-                        stmt.value.value, str
-                    ):
-                        values.append(EnumMember(member_name=member_name, value=stmt.value.value))
-                    else:
-                        # Use the member name as both name and value
-                        values.append(EnumMember(member_name=member_name, value=member_name))
-    return EnumDef(name=node.name, values=values, file_path=file_path)
 
 
 def _extract_base_class_columns(
@@ -482,55 +386,6 @@ def _get_tablename(node: ast.ClassDef) -> str:
                     ):
                         return stmt.value.value
     return node.name.lower()
-
-
-def _get_table_schema(node: ast.ClassDef) -> str | None:
-    """Return the schema name from ``__table_args__`` or None.
-
-    Handles both forms of ``__table_args__``:
-
-    * **Plain dict** — ``__table_args__ = {"schema": "myschema"}``
-    * **Tuple** — ``__table_args__ = (Index(...), {"schema": "myschema"})``
-
-    SQLAlchemy/SQLModel convention: when the tuple form is used (required for
-    combining ``Index`` / ``UniqueConstraint`` objects with keyword options),
-    the *last* element of the tuple must be a plain dict of table-level kwargs
-    (including ``"schema"``).  We scan from the end and use the first dict
-    found.
-    """
-    for stmt in node.body:
-        if not isinstance(stmt, ast.Assign):
-            continue
-        for target in stmt.targets:
-            if not (isinstance(target, ast.Name) and target.id == "__table_args__"):
-                continue
-            value = stmt.value
-
-            # Resolve the options dict: either the value itself (plain dict)
-            # or the last ast.Dict element inside a tuple.
-            if isinstance(value, ast.Dict):
-                options_dict: ast.Dict | None = value
-            elif isinstance(value, ast.Tuple):
-                options_dict = None
-                for elt in reversed(value.elts):
-                    if isinstance(elt, ast.Dict):
-                        options_dict = elt
-                        break
-            else:
-                continue
-
-            if options_dict is None:
-                continue
-
-            for key, val in zip(options_dict.keys, options_dict.values):
-                if (
-                    isinstance(key, ast.Constant)
-                    and key.value == "schema"
-                    and isinstance(val, ast.Constant)
-                    and isinstance(val.value, str)
-                ):
-                    return val.value
-    return None
 
 
 def _parse_table_class(
@@ -748,8 +603,6 @@ def _resolve_annotation(
         if isinstance(val, ast.Name) and val.id in ("dict", "Dict"):
             return "json", False
 
-        # X | None (Python 3.10+, represented as BinOp in some contexts)
-        # Subscript shouldn't be BinOp but handle it below
         # Fallthrough: try to resolve as-is
         type_str = _node_to_type_str(annotation)
         alter = _type_str_to_alter(type_str, known_enums)
@@ -779,19 +632,6 @@ def _resolve_annotation(
     type_str = _node_to_type_str(annotation)
     alter = _type_str_to_alter(type_str, known_enums)
     return alter, False
-
-
-def _node_to_type_str(node: ast.expr) -> str:
-    """Convert an AST annotation node to a dotted type string."""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return f"{_node_to_type_str(node.value)}.{node.attr}"
-    if isinstance(node, ast.Constant):
-        return str(node.value)
-    if isinstance(node, ast.Subscript):
-        return f"{_node_to_type_str(node.value)}[{_node_to_type_str(node.slice)}]"
-    return "unknown"
 
 
 def _type_str_to_alter(type_str: str, known_enums: dict[str, EnumDef]) -> str:
@@ -895,16 +735,6 @@ def _parse_field_call(
     # ------------------------------------------------------------------
     # sa_column / sa_type type override (enum detection only)
     # ------------------------------------------------------------------
-    # The Python type annotation is the authoritative source for the column
-    # type — the generator reproduces it verbatim.  sa_column/sa_type handle
-    # the database-level mapping and are preserved in extra_kwargs.
-    #
-    # Exception: SQLEnum(MyEnum) / Enum(MyEnum) inside sa_column tells us
-    # which application-level enum class the column uses, which may not be
-    # visible from the annotation alone (e.g. annotation is plain ``str``).
-    # We do NOT infer the type from JSON/JSONB sa_column expressions —
-    # ``Optional[str]`` with ``sa_column=Column(JSON)`` must stay as
-    # ``"string"`` so that ``alter apply`` does not rewrite the annotation.
     sa_expr = extra_kwargs.get("sa_column") or extra_kwargs.get("sa_type", "")
     if sa_expr:
         import re as _re
@@ -983,38 +813,3 @@ def _const_value(node: ast.expr) -> Any:
     if isinstance(node, ast.Constant):
         return node.value
     return None
-
-
-def _const_bool(node: ast.expr) -> bool | None:
-    """Return a bool Constant value, or None if not a bool constant."""
-    v = _const_value(node)
-    if isinstance(v, bool):
-        return v
-    return None
-
-
-def _make_relation(table_name: str, col: Column) -> Relation | None:
-    """Build a Relation from a foreign_key column.
-
-    ``col.foreign_key`` is stored verbatim (e.g. ``"table.col"`` or
-    ``"schema.table.col"``).  We split on the *last* dot to get the column
-    name, then strip any schema prefix from the table part so that the
-    canvas-facing ``Relation.to_table`` holds the unqualified table name.
-    """
-    if not col.foreign_key:
-        return None
-    parts = col.foreign_key.rsplit(".", 1)
-    if len(parts) != 2:
-        return None
-    to_table_raw, to_column = parts
-    # Strip leading schema qualifier ("myschema.users" → "users")
-    to_table = to_table_raw.rsplit(".", 1)[-1]
-    return Relation(
-        name=f"{table_name}_{col.name}_fkey",
-        from_table=table_name,
-        from_column=col.name,
-        to_table=to_table,
-        to_column=to_column,
-        type="many-to-one",
-        on_delete="CASCADE",
-    )

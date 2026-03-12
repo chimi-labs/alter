@@ -986,7 +986,7 @@ def test_bug6_enum_member_names_preserved() -> None:
 def test_bug6_enum_class_source_uses_member_names() -> None:
     """Generator should use member_name for identifier, value for string."""
     from alter.schema import EnumDef, EnumMember
-    from alter.generators.sqlmodel import _enum_class_source
+    from alter.generators.base import generate_enum_class as _enum_class_source
     enum = EnumDef(name="ActorType", values=[
         EnumMember(member_name="ENDUSER", value="enduser"),
         EnumMember(member_name="BOT", value="bot"),

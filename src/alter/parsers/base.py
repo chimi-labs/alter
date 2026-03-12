@@ -11,8 +11,9 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from alter.schema import AlterSchema, Table
+from alter.schema import AlterSchema, Column, EnumDef, Relation, Table
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +137,178 @@ def resolve_module_to_path(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Shared internal file-result dataclass
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FileResult:
+    """One-file parse result: tables, enums, relations, warnings."""
+
+    tables: list[Table] = field(default_factory=list)
+    enums: list[EnumDef] = field(default_factory=list)
+    relations: list[Relation] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Shared AST helpers — used by both SQLModel and SQLAlchemy parsers
+# ---------------------------------------------------------------------------
+
+
+def _node_to_name(node: ast.expr) -> str:
+    """Return the simple name of a Name or Attribute node, or '' otherwise."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _node_to_type_str(node: ast.expr) -> str:
+    """Convert an AST annotation node to a dotted type string."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_node_to_type_str(node.value)}.{node.attr}"
+    if isinstance(node, ast.Constant):
+        return str(node.value)
+    if isinstance(node, ast.Subscript):
+        return f"{_node_to_type_str(node.value)}[{_node_to_type_str(node.slice)}]"
+    return "unknown"
+
+
+def _const_bool(node: ast.expr) -> bool | None:
+    """Return the value of a boolean Constant node, or None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+        return node.value
+    return None
+
+
+def _is_enum_class(node: ast.ClassDef) -> bool:
+    """Return True if the class inherits from any Enum variant.
+
+    Handles:
+    * ``class X(Enum)`` / ``class X(str, Enum)`` — ``ast.Name`` base ``"Enum"``
+    * ``class X(IntEnum)`` / ``class X(StrEnum)``
+    * ``class X(enum.Enum)`` / ``class X(enum.IntEnum)`` — ``ast.Attribute`` base
+    """
+    _ENUM_NAMES = frozenset({"Enum", "IntEnum", "StrEnum"})
+    for base in node.bases:
+        if isinstance(base, ast.Name) and base.id in _ENUM_NAMES:
+            return True
+        if isinstance(base, ast.Attribute) and base.attr in _ENUM_NAMES:
+            return True
+    return False
+
+
+def _parse_enum_class(node: ast.ClassDef, file_path: str | None = None) -> EnumDef:
+    """Extract enum name, member names, and string values from an AST ClassDef.
+
+    Members whose values are non-string constants (e.g. ``int``) fall back to
+    using the member name as the value.
+    """
+    from alter.schema import EnumMember  # avoid circular at module level
+    values: list[EnumMember] = []
+    for stmt in node.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    member_name = target.id
+                    if isinstance(stmt.value, ast.Constant) and isinstance(
+                        stmt.value.value, str
+                    ):
+                        values.append(
+                            EnumMember(member_name=member_name, value=stmt.value.value)
+                        )
+                    else:
+                        # Use the member name as both name and value
+                        values.append(
+                            EnumMember(member_name=member_name, value=member_name)
+                        )
+    return EnumDef(name=node.name, values=values, file_path=file_path)
+
+
+def _get_table_schema(node: ast.ClassDef) -> str | None:
+    """Return the schema name from ``__table_args__`` or ``None``.
+
+    Handles both forms of ``__table_args__``:
+
+    * **Plain dict** — ``__table_args__ = {"schema": "myschema"}``
+    * **Tuple** — ``__table_args__ = (Index(...), {"schema": "myschema"})``
+
+    SQLAlchemy/SQLModel convention: when the tuple form is used, the *last*
+    element of the tuple must be a plain dict of table-level kwargs (including
+    ``"schema"``).  We scan from the end and use the first dict found.
+    """
+    for stmt in node.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        for target in stmt.targets:
+            if not (isinstance(target, ast.Name) and target.id == "__table_args__"):
+                continue
+            value = stmt.value
+
+            # Resolve the options dict: either the value itself (plain dict)
+            # or the last ast.Dict element inside a tuple.
+            if isinstance(value, ast.Dict):
+                options_dict: ast.Dict | None = value
+            elif isinstance(value, ast.Tuple):
+                options_dict = None
+                for elt in reversed(value.elts):
+                    if isinstance(elt, ast.Dict):
+                        options_dict = elt
+                        break
+            else:
+                continue
+
+            if options_dict is None:
+                continue
+
+            for key, val in zip(options_dict.keys, options_dict.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "schema"
+                    and isinstance(val, ast.Constant)
+                    and isinstance(val.value, str)
+                ):
+                    return val.value
+    return None
+
+
+def _make_relation(table_name: str, col: Column) -> Relation | None:
+    """Build a Relation from a foreign_key column.
+
+    ``col.foreign_key`` is stored verbatim (e.g. ``"table.col"`` or
+    ``"schema.table.col"``).  We split on the *last* dot to get the column
+    name, then strip any schema prefix from the table part so that the
+    canvas-facing ``Relation.to_table`` holds the unqualified table name.
+    """
+    if not col.foreign_key:
+        return None
+    parts = col.foreign_key.rsplit(".", 1)
+    if len(parts) != 2:
+        return None
+    to_table_raw, to_column = parts
+    # Strip leading schema qualifier ("myschema.users" → "users")
+    to_table = to_table_raw.rsplit(".", 1)[-1]
+    return Relation(
+        name=f"{table_name}_{col.name}_fkey",
+        from_table=table_name,
+        from_column=col.name,
+        to_table=to_table,
+        to_column=to_column,
+        type="many-to-one",
+        on_delete="CASCADE",
+    )
+
+
+# ---------------------------------------------------------------------------
+# ParseResult + BaseParser
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class ParseResult:
     """Full result from parsing one or more ORM model files.
@@ -211,6 +384,103 @@ class BaseParser(ABC):
             except ValueError:
                 pass
         return str(path)
+
+    def _search_roots(self, path: Path) -> list[Path]:
+        """Return candidate package root directories for resolving imports.
+
+        When *project_root* is set, it is the sole search root. Otherwise a
+        heuristic walks up from the file until it leaves a Python package
+        (no ``__init__.py``), giving both that root and the file's directory.
+        """
+        if self.project_root is not None:
+            return [self.project_root]
+        curr = path.parent
+        while (curr / "__init__.py").exists() and curr != curr.parent:
+            curr = curr.parent
+        return [curr, path.parent]
+
+    def _collect_import_deps(
+        self,
+        path: Path,
+        search_roots: list[Path],
+    ) -> list[tuple[Path, str, ast.Module]]:
+        """BFS traversal of the import graph starting from *path*.
+
+        Returns a list of ``(dep_path, dep_fp, dep_tree)`` tuples for every
+        dependency reachable from *path* (excluding *path* itself).  Circular
+        imports are safe — each file is visited at most once.
+
+        Used by both ``_resolve_imports`` implementations to avoid duplicating
+        the traversal loop.
+        """
+        visited: set[Path] = {path.resolve()}
+        deps: list[tuple[Path, str, ast.Module]] = []
+        queue: list[Path] = []
+
+        # Seed queue with direct imports of *path*
+        try:
+            src = path.read_text(encoding="utf-8")
+            tree = ast.parse(src)
+            for imp in extract_imports(tree):
+                dep = resolve_module_to_path(imp.module, search_roots, path, imp.level)
+                if dep is not None and dep.resolve() not in visited:
+                    queue.append(dep)
+        except Exception:  # noqa: BLE001
+            return []
+
+        while queue:
+            dep_path = queue.pop(0)
+            dep_resolved = dep_path.resolve()
+            if dep_resolved in visited:
+                continue
+            visited.add(dep_resolved)
+            try:
+                dep_src = dep_path.read_text(encoding="utf-8")
+                dep_tree = ast.parse(dep_src)
+                dep_fp = self._relative_path(dep_path)
+                deps.append((dep_path, dep_fp, dep_tree))
+                # Follow transitive imports
+                for imp in extract_imports(dep_tree):
+                    tdep = resolve_module_to_path(
+                        imp.module, search_roots, dep_path, imp.level
+                    )
+                    if tdep is not None and tdep.resolve() not in visited:
+                        queue.append(tdep)
+            except Exception:  # noqa: BLE001
+                pass
+
+        return deps
+
+    def _phase1_collect_enums(
+        self, py_files: list[Path]
+    ) -> tuple[dict[str, EnumDef], dict[Path, ast.Module]]:
+        """Phase 1: scan *all* ``.py`` files to collect enum definitions.
+
+        Returns ``(global_enums, parsed_trees)`` where *global_enums* maps
+        class name → EnumDef and *parsed_trees* maps file path → AST (for
+        backends that need a second sub-pass, e.g. SQLModel base-class
+        collection).
+
+        Files that cannot be parsed are silently skipped — syntax errors in
+        enum-only files do not abort the directory parse.
+        """
+        global_enums: dict[str, EnumDef] = {}
+        parsed_trees: dict[Path, ast.Module] = {}
+
+        for py_file in py_files:
+            try:
+                source = py_file.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(py_file))
+                parsed_trees[py_file] = tree
+                fp = self._relative_path(py_file)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ClassDef) and _is_enum_class(node):
+                        enum_def = _parse_enum_class(node, file_path=fp)
+                        global_enums.setdefault(node.name, enum_def)
+            except Exception:  # noqa: BLE001
+                pass  # syntax errors handled later in Phase 2
+
+        return global_enums, parsed_trees
 
 
 def deduplicate_tables(
