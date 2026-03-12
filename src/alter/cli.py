@@ -145,15 +145,29 @@ def main() -> None:
               help="ORM to use (auto-detected if omitted).")
 @click.option("--output", default=None, metavar="PATH",
               help="Output .alter file path (default: <project>.alter in cwd).")
-def init(orm_override: str | None, output: str | None) -> None:
+@click.option("--force", is_flag=True, default=False,
+              help="Overwrite existing .alter file without confirmation.")
+def init(orm_override: str | None, output: str | None, force: bool) -> None:
     """Create a .alter file from existing ORM model files.
 
     \b
     alter init                — scan model files and create schema.alter
     alter init --orm sqlmodel — force ORM detection
+    alter init --force        — overwrite existing file without prompting
     """
     cwd = Path.cwd()
     out_path = Path(output) if output else cwd / "schema.alter"
+
+    if out_path.exists() and not force:
+        try:
+            from alter.schema import AlterSchema
+            existing = AlterSchema.load(out_path)
+            count = len(existing.tables)
+            click.echo(f"  {out_path.name} already exists ({count} table{'s' if count != 1 else ''}).")
+        except Exception:
+            click.echo(f"  {out_path.name} already exists.")
+        if not click.confirm("  Overwrite?", default=False):
+            raise click.Abort()
 
     # From code
     orm = orm_override or _detect_orm(cwd)
