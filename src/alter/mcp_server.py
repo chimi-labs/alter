@@ -89,8 +89,20 @@ class _LazyMCP:
 
     def _init_real(self, real_mcp: Any) -> None:
         self._real = real_mcp
+        # MCP >=1.26 added structured_output which defaults to None, causing
+        # FastMCP to generate Pydantic output models from return annotations.
+        # On Python 3.11+ this can raise "A non-annotated attribute was
+        # detected: result = <class 'str'>" and crash the server on startup.
+        # Opt out by defaulting to False (tools return text content as before).
+        import inspect as _inspect
+        _structured_output_supported = (
+            "structured_output" in _inspect.signature(real_mcp.tool).parameters
+        )
         for fn, kwargs in self._pending_tools:
-            real_mcp.tool(**kwargs)(fn)
+            kw = dict(kwargs)
+            if _structured_output_supported:
+                kw.setdefault("structured_output", False)
+            real_mcp.tool(**kw)(fn)
         for fn, uri, kwargs in self._pending_resources:
             real_mcp.resource(uri, **kwargs)(fn)
 
