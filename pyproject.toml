@@ -1,6 +1,6 @@
 [project]
 name = "alterdb"
-version = "0.1.6"
+version = "0.1.7"
 description = "Visual schema design for SQLModel and SQLAlchemy. Edit your database as a diagram, write it back as code."
 license = "MIT"
 license-files = ["LICENSE"]

@@ -2,6 +2,77 @@
 
 All notable changes to Alter are documented here.
 
+## [0.1.7] — 2026-03-12
+
+### Fixed
+
+#### Canvas: enum values displayed as `[object Object]`
+
+- Added `enumValueDisplay()` helper in `canvas.js` that renders both plain
+  strings and `EnumMember` objects (`{member_name, value}`) correctly.
+  When the member name and value differ, displays as `"MEMBER = value"`.
+- Added `parseEnumValue()` to parse textarea lines back into structured
+  `{member_name, value}` objects on save, preventing data loss.
+
+#### Canvas: enum add / edit / delete were silent no-ops
+
+- The `add_enum`, `edit_enum`, and `drop_enum` operations sent by the canvas
+  were never handled in `_handle_propose` on the server — they silently did
+  nothing. Added `add_enum` handler; edit and delete are intentionally excluded
+  (see below).
+
+#### Canvas: restrict enum mutations to add + read only
+
+- Removed Edit and Delete buttons from the enum list. Renaming or deleting an
+  enum must be done in code directly to avoid cascading edge cases. The canvas
+  only supports adding new enums and reading existing ones.
+
+#### `_migration_sql` silently skips `add_relation` / `drop_relation`
+
+- The handler was looking for `ch.details["relation"]` (a key that never
+  exists); the diff engine actually provides `ch.table`, `ch.column`, and
+  `ch.details["to"]` as `"to_table.to_column"`. Rewrote both branches to
+  read the correct fields. `add_relation` now also looks up `on_delete` from
+  the proposed schema's relations list.
+
+#### `_migration_sql` ignores `nullable`, `unique`, and `default` changes
+
+- The `modify_column` branch only emitted a `TYPE` change (unconditionally).
+  It now emits each applicable statement independently:
+  `SET NOT NULL` / `DROP NOT NULL`, `ADD CONSTRAINT … UNIQUE` /
+  `DROP CONSTRAINT IF EXISTS`, `SET DEFAULT …` / `DROP DEFAULT`, and
+  `TYPE … USING col::TYPE` (only when the type actually changed).
+  Reuses `_format_default()` from the SQL exporter for correct quoting.
+
+#### `rename_entity` leaves stale `Column.foreign_key` strings
+
+- After renaming a table, `Column.foreign_key` strings in other tables
+  (e.g. `"users.id"`) were not updated. Added a sweep of all columns after
+  updating `Relation` objects.
+- Same fix for column renames: `"table.old_col"` → `"table.new_col"` across
+  all columns in all tables.
+
+#### `modify_column` cannot clear `default` or `max_length`
+
+- Used `None` check (`if default is not None`) which made it impossible to
+  clear a column's default by passing `default=None`. Introduced a
+  module-level `_UNSET = object()` sentinel; both `default` and `max_length`
+  now default to `_UNSET` so `None` is correctly treated as "clear this field".
+
+#### `validate_schema` misses duplicate table names
+
+- A schema with two tables sharing the same name passed validation with no
+  errors. Added a pre-pass that reports `severity="error"` for each duplicate
+  occurrence, preventing broken code generation and SQL export.
+
+### Added
+
+#### `alter.__version__`
+
+- `alter/__init__.py` now exposes `__version__` via `importlib.metadata`,
+  making `import alter; alter.__version__` work at runtime.
+  `alterdb.__version__` also works via the existing compatibility shim.
+
 ## [0.1.6] — 2026-03-12
 
 ### Fixed
