@@ -287,8 +287,7 @@ def sync(alter_file: str | None, model_dir: str | None) -> None:
 
     if result.skipped_files:
         for fp in result.skipped_files:
-            click.echo(f"  ⚠  Skipped: {fp}", err=True)
-        sys.exit(1)
+            click.echo(f"  ⚠  Skipped (parse error): {fp.relative_to(cwd) if fp.is_relative_to(cwd) else fp}", err=True)
 
     # Preserve canvas positions
     for tbl in new_schema.tables:
@@ -296,9 +295,14 @@ def sync(alter_file: str | None, model_dir: str | None) -> None:
             tbl.position = pos_map[tbl.name]
 
     new_schema.save(path)
+
+    skip_note = f" ({len(result.skipped_files)} file{'s' if len(result.skipped_files) != 1 else ''} skipped with errors)" if result.skipped_files else ""
     click.echo(
-        f"  Synced {len(new_schema.tables)} tables → {path.name}"
+        f"  Synced {len(new_schema.tables)} tables → {path.name}{skip_note}"
     )
+
+    if result.skipped_files:
+        sys.exit(2)
 
 
 # ---------------------------------------------------------------------------
