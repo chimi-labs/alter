@@ -2,6 +2,63 @@
 
 All notable changes to Alter are documented here.
 
+## [0.1.8] — 2026-03-12
+
+### Fixed
+
+#### SQL DDL export omits `CREATE INDEX` for columns with `index=True`
+
+- `export_sql()` in `exporters/sql.py` only emitted `CREATE TABLE` blocks.
+  It now appends `CREATE INDEX idx_{table}_{col} ON {qualified} ({col});` after
+  each table for every column where `index=True` and `primary_key=False`.
+  Schema-qualified table names (`schema.table`) are used when `schema_name` is
+  set, matching the existing `CREATE TABLE` behaviour.
+
+#### Markdown diff output silently drops index and enum change types
+
+- `changes_to_markdown()` in `diff_format.py` only handled 7 of the 12 change
+  types defined by the diff engine. The remaining 5 (`add_index`, `drop_index`,
+  `add_enum`, `drop_enum`, `modify_enum`) were silently dropped, so
+  `alter diff --format markdown` never showed index or enum changes.
+  Added the missing sections and `elif` branches for all five types.
+
+#### `alter import` always reports parsed count, not actual new-table count
+
+- Both `alter import` (CLI) and the `import_schema` MCP tool always printed
+  `"Imported N tables"` using the number of tables parsed from the source file,
+  even when all of them were already present and skipped. Now computes
+  `new_count` and `skipped_count` by diffing parsed names against
+  `staging.current_schema` before proposing, and reports both:
+  `"Imported 0 new tables (1 skipped — already in schema)"`.
+
+#### `alter init` silently overwrites existing `schema.alter`
+
+- Running `alter init` a second time would destroy canvas positions and manual
+  edits without any warning. Added an existence check: if the target file
+  already exists and `--force` is not set, the command prints the existing table
+  count and prompts `"Overwrite? [y/N]"` via `click.confirm()`. If the user
+  declines, the command aborts without touching the file. The new `--force` flag
+  skips the prompt for scripted or CI use.
+
+#### `_find_alter_file` picks alphabetically-first `.alter` file instead of `schema.alter`
+
+- When multiple `.alter` files existed in a directory, `_find_alter_file()`
+  returned `sorted()[0]`, which could silently pick `custom.alter` over
+  `schema.alter`. Now checks for a file literally named `schema.alter` first
+  and returns it immediately if found. When multiple files exist and none is
+  `schema.alter`, a warning is printed to stderr listing the candidates and
+  suggesting `--file` to disambiguate.
+
+#### Canvas auto-positioning can place new tables over manually-dragged ones
+
+- `_auto_position_new()` started the grid index from `len(positioned)`, which
+  assumed all existing tables fill the grid sequentially. A table dragged to
+  grid slot N would be overlapped by the next auto-placed table.
+  Fixed by building an `occupied` set of existing positions and skipping any
+  candidate grid slot whose coordinates fall within `_TABLE_W × _TABLE_H`
+  (250 × 280 px) of an already-occupied position. Each newly placed table is
+  added to `occupied` so subsequent tables in the same pass also avoid it.
+
 ## [0.1.7] — 2026-03-12
 
 ### Fixed

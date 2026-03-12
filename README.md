@@ -324,7 +324,7 @@ Tables already in your schema are skipped — no duplicates.
 
 | Command              | What it does                                                  |
 | -------------------- | ------------------------------------------------------------- |
-| `alter init`         | Create `schema.alter` from existing ORM model files           |
+| `alter init`         | Create `schema.alter` from existing ORM model files (`--force` to overwrite) |
 | `alter canvas`       | Open the interactive ERD in your browser                      |
 | `alter apply`        | Write schema changes to your ORM model files                  |
 | `alter sync`         | Update `schema.alter` from your ORM model files               |
@@ -335,6 +335,25 @@ Tables already in your schema are skipped — no duplicates.
 | `alter import`       | Import tables from a `.sql` or `.alter` file                  |
 | `alter merge-driver` | Git merge driver for `.alter` files                           |
 | `alter mcp`          | Start the MCP server                                          |
+
+### `alter init`
+
+Scan your project for ORM model files and create `schema.alter`:
+
+```bash
+alter init                    # auto-detect ORM, scan models
+alter init --orm sqlmodel     # force ORM
+alter init --output mydb.alter  # write to a custom path
+alter init --force            # overwrite an existing file without prompting
+```
+
+If `schema.alter` already exists, `alter init` will show the existing table
+count and ask for confirmation before overwriting. Use `--force` to skip the
+prompt in CI or scripted environments.
+
+To re-scan after adding new model files without touching the existing schema,
+use `alter sync` (preserves canvas positions) or `alter add <file>` (merges a
+single file).
 
 ### `alter diff`
 
@@ -407,6 +426,13 @@ alter import templates/saas.alter   # import a built-in template
 
 Format is auto-detected from the file extension (`.sql` or `.alter`). You can
 also override it with `--format sql` or `--format alter`.
+
+The command reports both added and skipped counts, so re-running on the same
+file is safe and informative:
+
+```
+Imported 0 new tables (3 skipped — already in schema) from schema.sql → schema.alter
+```
 
 ### `alter merge-driver`
 
