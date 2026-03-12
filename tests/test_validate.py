@@ -363,3 +363,158 @@ class TestSchemaQualifiedForeignKeys:
         format_errors = [e for e in errors if "format" in e.message.lower()]
         assert format_errors
         assert "schema.table.column" in format_errors[0].message
+
+# ---------------------------------------------------------------------------
+# Identifier validation — table names
+# ---------------------------------------------------------------------------
+
+
+class TestTableNameIdentifiers:
+    """validate_schema should flag invalid table names."""
+
+    def _schema_with_table(self, name: str) -> AlterSchema:
+        return AlterSchema(tables=[
+            Table(
+                name=name,
+                columns=[Column(name="id", type="uuid", primary_key=True, nullable=False)],
+            )
+        ])
+
+    # --- valid names (no identifier errors) ---
+
+    def test_simple_lowercase_name_is_valid(self) -> None:
+        errors = _issues(self._schema_with_table("users"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    def test_name_with_underscore_prefix_is_valid(self) -> None:
+        errors = _issues(self._schema_with_table("_internal"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    def test_mixed_case_name_is_valid(self) -> None:
+        errors = _issues(self._schema_with_table("UserRole"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    def test_name_with_digits_in_middle_is_valid(self) -> None:
+        errors = _issues(self._schema_with_table("user2role"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    # --- invalid names (must produce an error) ---
+
+    def test_name_starting_with_digit_is_error(self) -> None:
+        errors = _issues(self._schema_with_table("123users"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    def test_name_with_hyphen_is_error(self) -> None:
+        errors = _issues(self._schema_with_table("user-profile"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    def test_name_with_space_is_error(self) -> None:
+        errors = _issues(self._schema_with_table("my table"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    def test_name_with_dot_is_error(self) -> None:
+        errors = _issues(self._schema_with_table("my.table"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    # --- SQL reserved words (must produce a warning, not an error) ---
+
+    def test_reserved_word_select_is_warning(self) -> None:
+        all_issues = _issues(self._schema_with_table("select"))
+        warnings = [i for i in all_issues if i.severity == "warning" and "reserved" in i.message.lower()]
+        assert warnings, "Expected a reserved-word warning for table 'select'"
+
+    def test_reserved_word_select_no_identifier_error(self) -> None:
+        errors = _issues(self._schema_with_table("select"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    def test_reserved_word_table_is_warning(self) -> None:
+        all_issues = _issues(self._schema_with_table("table"))
+        warnings = [i for i in all_issues if i.severity == "warning" and "reserved" in i.message.lower()]
+        assert warnings
+
+    def test_reserved_word_case_insensitive(self) -> None:
+        """Both 'SELECT' and 'Select' should trigger the reserved-word warning."""
+        for name in ("SELECT", "Select"):
+            all_issues = _issues(self._schema_with_table(name))
+            warnings = [i for i in all_issues if i.severity == "warning" and "reserved" in i.message.lower()]
+            assert warnings, f"Expected reserved-word warning for table '{name}'"
+
+
+# ---------------------------------------------------------------------------
+# Identifier validation — column names
+# ---------------------------------------------------------------------------
+
+
+class TestColumnNameIdentifiers:
+    """validate_schema should flag invalid column names."""
+
+    def _schema_with_col(self, col_name: str) -> AlterSchema:
+        return AlterSchema(tables=[
+            Table(
+                name="users",
+                columns=[
+                    Column(name="id", type="uuid", primary_key=True, nullable=False),
+                    Column(name=col_name, type="string"),
+                ],
+            )
+        ])
+
+    # --- valid names ---
+
+    def test_simple_column_name_is_valid(self) -> None:
+        errors = _issues(self._schema_with_col("email"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    def test_underscore_prefix_column_is_valid(self) -> None:
+        errors = _issues(self._schema_with_col("_meta"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    def test_column_with_trailing_digit_is_valid(self) -> None:
+        errors = _issues(self._schema_with_col("address2"), "error")
+        ident_errors = [e for e in errors if "valid sql identifier" in e.message.lower()]
+        assert ident_errors == []
+
+    # --- invalid names ---
+
+    def test_column_starting_with_digit_is_error(self) -> None:
+        errors = _issues(self._schema_with_col("1name"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    def test_column_with_hyphen_is_error(self) -> None:
+        errors = _issues(self._schema_with_col("first-name"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    def test_column_with_space_is_error(self) -> None:
+        errors = _issues(self._schema_with_col("my column"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    def test_column_with_at_sign_is_error(self) -> None:
+        errors = _issues(self._schema_with_col("email@domain"), "error")
+        assert any("valid sql identifier" in e.message.lower() for e in errors)
+
+    # --- SQL reserved words ---
+
+    def test_column_named_from_is_warning(self) -> None:
+        all_issues = _issues(self._schema_with_col("from"))
+        warnings = [i for i in all_issues if i.severity == "warning" and "reserved" in i.message.lower()]
+        assert warnings
+
+    def test_column_named_select_is_warning_not_error(self) -> None:
+        all_issues = _issues(self._schema_with_col("select"))
+        warnings = [i for i in all_issues if i.severity == "warning" and "reserved" in i.message.lower()]
+        errors = [i for i in all_issues if i.severity == "error" and "valid sql identifier" in i.message.lower()]
+        assert warnings
+        assert not errors
+
+    def test_column_reserved_word_case_insensitive(self) -> None:
+        for name in ("FROM", "From", "from"):
+            all_issues = _issues(self._schema_with_col(name))
+            warnings = [i for i in all_issues if i.severity == "warning" and "reserved" in i.message.lower()]
+            assert warnings, f"Expected reserved-word warning for column '{name}'"

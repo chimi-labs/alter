@@ -6,11 +6,32 @@ Issues have severity ``"error"``, ``"warning"``, or ``"info"``.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 from alter.schema import AlterSchema
 from alter.types import TYPE_MAP
+
+
+# ---------------------------------------------------------------------------
+# Identifier validation helpers
+# ---------------------------------------------------------------------------
+
+# Valid SQL / Python identifier: starts with letter or underscore, followed by
+# any combination of letters, digits, and underscores.
+_VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+# Common SQL reserved words that break DDL if used unquoted as identifiers.
+# Not exhaustive — covers the keywords most likely to appear as accidental names.
+_SQL_RESERVED: frozenset[str] = frozenset({
+    "select", "from", "where", "insert", "update", "delete",
+    "create", "drop", "alter", "table", "column", "index",
+    "primary", "foreign", "key", "references", "constraint",
+    "unique", "not", "null", "default", "check", "in", "and",
+    "or", "order", "group", "by", "having", "limit", "offset",
+    "join", "on", "as", "set", "values", "into",
+})
 
 
 Severity = Literal["error", "warning", "info"]
@@ -82,6 +103,25 @@ def validate_schema(schema: AlterSchema) -> list[ValidationIssue]:
             ))
             continue
 
+        # Invalid SQL identifier
+        if not _VALID_IDENTIFIER_RE.match(table.name):
+            issues.append(ValidationIssue(
+                severity="error", table=table.name,
+                message=(
+                    f"Table name '{table.name}' is not a valid SQL identifier "
+                    f"(must start with a letter or underscore and contain only "
+                    f"alphanumeric characters and underscores)"
+                ),
+            ))
+        elif table.name.lower() in _SQL_RESERVED:
+            issues.append(ValidationIssue(
+                severity="warning", table=table.name,
+                message=(
+                    f"Table name '{table.name}' is a SQL reserved word — "
+                    f"may cause issues with DDL export and some databases"
+                ),
+            ))
+
         col_names: list[str] = []
         has_pk = False
 
@@ -93,6 +133,25 @@ def validate_schema(schema: AlterSchema) -> list[ValidationIssue]:
                     message="Column name is empty",
                 ))
                 continue
+
+            # Invalid SQL identifier
+            if not _VALID_IDENTIFIER_RE.match(col.name):
+                issues.append(ValidationIssue(
+                    severity="error", table=table.name, column=col.name,
+                    message=(
+                        f"Column name '{col.name}' is not a valid SQL identifier "
+                        f"(must start with a letter or underscore and contain only "
+                        f"alphanumeric characters and underscores)"
+                    ),
+                ))
+            elif col.name.lower() in _SQL_RESERVED:
+                issues.append(ValidationIssue(
+                    severity="warning", table=table.name, column=col.name,
+                    message=(
+                        f"Column name '{col.name}' is a SQL reserved word — "
+                        f"may cause issues with DDL export and some databases"
+                    ),
+                ))
 
             # Duplicate column names
             if col.name in col_names:

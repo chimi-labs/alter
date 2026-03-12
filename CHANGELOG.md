@@ -6,6 +6,25 @@ All notable changes to Alter are documented here.
 
 ### Fixed
 
+#### `validate_schema` accepts invalid SQL/Python identifiers as table/column names
+
+- `validate_schema()` in `validate.py` only checked for empty and duplicate
+  names.  Names like `123users`, `user-name`, or `select` passed silently even
+  though they generate broken DDL (`CREATE TABLE 123users` is a SQL syntax error)
+  or break Python codegen (hyphens are not valid Python identifiers).
+- Added `_VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')` and
+  `_SQL_RESERVED` frozenset (34 common SQL keywords) to `validate.py`.
+- Structurally invalid names (digit-start, hyphens, spaces, etc.) now produce
+  a **`"error"`**-severity `ValidationIssue`; these will always break SQL export.
+- SQL reserved words that are otherwise valid identifiers produce a
+  **`"warning"`**-severity issue; some databases handle them via quoting but
+  they're risky enough to flag.  The check is case-insensitive so `SELECT`,
+  `Select`, and `select` all trigger.
+- The same checks apply to both table names and column names.
+- Added 22 tests across `TestTableNameIdentifiers` and `TestColumnNameIdentifiers`
+  covering valid names (plain, underscore-prefix, mixed-case), structurally
+  invalid names (digit-start, hyphen, space, dot, `@`), and reserved words.
+
 #### `add_column` MCP tool creates dangling Relation for nonexistent FK targets
 
 - `add_column` in `mcp_server.py` appended the column first and then created a
