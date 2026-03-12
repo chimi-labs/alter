@@ -375,9 +375,23 @@ Check the schema for structural problems before applying or exporting:
 alter validate
 ```
 
-Reports errors (broken FK references, duplicate table names, unsupported type
-combinations), warnings, and info-level hints. Exits with code 1 if any errors
+Reports errors, warnings, and info-level hints. Exits with code 1 if any errors
 are found — safe to use in CI.
+
+**Errors** (must fix before applying):
+
+- Broken FK references — target table or column does not exist
+- Duplicate table or column names
+- Unknown column types
+- Invalid SQL identifiers — names starting with a digit or containing hyphens,
+  spaces, or other special characters (`123users`, `user-name`)
+
+**Warnings** (advisory):
+
+- Tables without a primary key
+- FK columns missing an index
+- SQL reserved words used as names (`select`, `from`, `table`, …) — valid
+  identifiers that can cause DDL issues on some databases
 
 Foreign key references can be written as `table.column` or `schema.table.column`
 for tables in a non-default PostgreSQL schema.

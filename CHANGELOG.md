@@ -2,7 +2,7 @@
 
 All notable changes to Alter are documented here.
 
-## [Unreleased]
+## [0.1.9] — 2026-03-12
 
 ### Fixed
 
