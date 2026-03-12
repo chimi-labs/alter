@@ -48,6 +48,10 @@ from alter.schema import AlterSchema, Column, EnumDef, Relation, Table
 from alter.staging import StagingManager
 from alter.validate import validate_schema
 
+# Sentinel for "parameter not supplied" — distinct from None so callers can
+# explicitly pass None to clear optional string/int fields (e.g. default, max_length).
+_UNSET = object()
+
 # ---------------------------------------------------------------------------
 # Server singleton + state
 # ---------------------------------------------------------------------------
@@ -505,12 +509,14 @@ def modify_column(
     new_type: str | None = None,
     nullable: bool | None = None,
     unique: bool | None = None,
-    default: str | None = None,
-    max_length: int | None = None,
+    default: str | None = _UNSET,
+    max_length: int | None = _UNSET,
 ) -> str:
     """Modify properties of an existing column in the proposed schema.
 
     Only the provided fields are changed; omit a field to leave it unchanged.
+    Pass ``default=None`` to remove an existing default value entirely.
+    Pass ``max_length=None`` to remove an existing max_length value entirely.
     """
     staging = _get_staging()
 
@@ -530,9 +536,9 @@ def modify_column(
             col.nullable = nullable
         if unique is not None:
             col.unique = unique
-        if default is not None:
+        if default is not _UNSET:
             col.default = default
-        if max_length is not None:
+        if max_length is not _UNSET:
             col.max_length = max_length
         return s
 

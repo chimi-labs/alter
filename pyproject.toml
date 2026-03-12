@@ -59,6 +59,11 @@ packages = ["src/alter", "src/alterdb"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = ["integration: requires docker compose up -d (Postgres on port 5433)"]
+filterwarnings = [
+  # _UNSET sentinel is not JSON-serialisable; Pydantic correctly omits it from
+  # the MCP tool JSON schema (parameters are still optional). Warning is benign.
+  "ignore:Default value.*is not JSON serializable",
+]
 
 [tool.mypy]
 strict = true
