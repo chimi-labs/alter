@@ -213,15 +213,17 @@ def _apply_to_code_impl(
 
     diffs: list[str] = []
     writes: list[str] = []
+    default_path = _default_model_path(schema, project_root)
 
     for rel_path, tables in file_groups.items():
         abs_path = project_root / rel_path
         # Build a per-file sub-schema for the generator (keep all enums for type resolution)
         file_schema = schema.model_copy(update={"tables": tables})
-        # Only define enum classes that are owned by this file; others are imported elsewhere
+        # Only define enum classes that are owned by this file; others are imported elsewhere.
+        # Enums with file_path=None route to the default model file only, not every file.
         local_enum_names = {
             e.name for e in schema.enums
-            if e.file_path is None or e.file_path == rel_path
+            if e.file_path == rel_path or (e.file_path is None and rel_path == default_path)
         }
 
         if abs_path.exists():

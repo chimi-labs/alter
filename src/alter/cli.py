@@ -417,15 +417,16 @@ def apply(alter_file: str | None, preview: bool) -> None:
         file_groups.setdefault(fp, []).append(t)
 
     changed = 0
+    default_path = _default_model_path(schema, project_root)
     for rel_path, tables in sorted(file_groups.items()):
         abs_path = project_root / rel_path
         # Only emit enum classes that belong to this specific file.
-        # Enums with file_path=None are treated as local to every file that
-        # needs them (single-file projects); enums with an explicit file_path
-        # are only emitted in that file — matching the preview_apply behaviour.
+        # Enums with an explicit file_path are only emitted in that file.
+        # Enums with file_path=None default to the project's default model
+        # file; they must NOT be written to every file in multi-file projects.
         local_enum_names = {
             e.name for e in schema.enums
-            if e.file_path is None or e.file_path == rel_path
+            if e.file_path == rel_path or (e.file_path is None and rel_path == default_path)
         }
         file_schema = schema.model_copy(update={"tables": tables})
 

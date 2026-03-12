@@ -358,12 +358,14 @@ class BaseGenerator(ABC):
             file_tables.setdefault(fp, []).append(table)
 
         diffs: list[str] = []
+        default_path = _default_model_path(schema, project_root)
         for rel_path, tables in file_tables.items():
             abs_path = project_root / rel_path
-            # Only define enum classes that are owned by this file
+            # Only define enum classes that are owned by this file.
+            # Enums with file_path=None route to the default model file only.
             local_enum_names = {
                 e.name for e in schema.enums
-                if e.file_path is None or e.file_path == rel_path
+                if e.file_path == rel_path or (e.file_path is None and rel_path == default_path)
             }
             sub = AlterSchema(
                 version=schema.version,
