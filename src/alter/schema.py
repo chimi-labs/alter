@@ -140,6 +140,14 @@ class AlterSchema(BaseModel):
 
     This is the complete in-memory representation of a project's database schema
     plus canvas layout. Serialize to/from JSON with ``load`` and ``save``.
+
+    Args:
+        strict: When ``True`` (default) the model validator raises
+            ``ValueError`` for unknown column types.  Pass ``strict=False``
+            to allow unknown types through — useful for testing, importing
+            external schemas, or constructing schemas before you know all enum
+            names.  Callers using ``strict=False`` should run
+            ``validate_schema()`` separately to report any type issues.
     """
 
     version: int = 1
@@ -149,6 +157,7 @@ class AlterSchema(BaseModel):
     relations: list[Relation] = Field(default_factory=list)
     enums: list[EnumDef] = Field(default_factory=list)
     metadata: SchemaMetadata = Field(default_factory=SchemaMetadata)
+    strict: bool = Field(default=True, exclude=True, repr=False)
 
     @field_validator("version")
     @classmethod
@@ -163,7 +172,13 @@ class AlterSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_enum_references(self) -> "AlterSchema":
-        """Check that enum column types reference a defined enum."""
+        """Check that enum column types reference a defined enum.
+
+        Skipped when ``strict=False`` — use ``validate_schema()`` instead.
+        """
+        if not self.strict:
+            return self
+
         from alter.types import TYPE_MAP  # avoid circular import at module level
 
         known_enums = {e.name for e in self.enums}
