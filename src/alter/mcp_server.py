@@ -649,12 +649,18 @@ def rename_entity(table: str, new_name: str, column: str | None = None) -> str:
                 raise ValueError(f"Table '{new_name}' already exists")
             old_name = tbl.name
             tbl.name = new_name
-            # Update FK references in relations
+            # Update relation objects
             for rel in s.relations:
                 if rel.from_table == old_name:
                     rel.from_table = new_name
                 if rel.to_table == old_name:
                     rel.to_table = new_name
+            # Update Column.foreign_key strings ("old_table.col" → "new_table.col")
+            prefix = old_name + "."
+            for t in s.tables:
+                for col in t.columns:
+                    if col.foreign_key and col.foreign_key.startswith(prefix):
+                        col.foreign_key = new_name + col.foreign_key[len(old_name):]
         else:
             # Rename column
             tbl = next((t for t in s.tables if t.name == table), None)
@@ -666,12 +672,19 @@ def rename_entity(table: str, new_name: str, column: str | None = None) -> str:
             if any(c.name == new_name for c in tbl.columns):
                 raise ValueError(f"Column '{new_name}' already exists in '{table}'")
             col.name = new_name
-            # Update FK references
+            # Update relation objects
             for rel in s.relations:
                 if rel.from_table == table and rel.from_column == column:
                     rel.from_column = new_name
                 if rel.to_table == table and rel.to_column == column:
                     rel.to_column = new_name
+            # Update Column.foreign_key strings ("table.old_col" → "table.new_col")
+            old_fk = f"{table}.{column}"
+            new_fk = f"{table}.{new_name}"
+            for t in s.tables:
+                for c in t.columns:
+                    if c.foreign_key == old_fk:
+                        c.foreign_key = new_fk
         return s
 
     try:
