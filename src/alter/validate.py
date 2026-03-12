@@ -53,6 +53,18 @@ def validate_schema(schema: AlterSchema) -> list[ValidationIssue]:
     """
     issues: list[ValidationIssue] = []
 
+    # Duplicate table names
+    seen_table_names: set[str] = set()
+    for table in schema.tables:
+        if table.name in seen_table_names:
+            issues.append(ValidationIssue(
+                severity="error",
+                table=table.name,
+                message=f"Duplicate table name '{table.name}'",
+            ))
+        else:
+            seen_table_names.add(table.name)
+
     # Build lookup structures
     table_names = {t.name for t in schema.tables}
     table_col_map: dict[str, set[str]] = {
