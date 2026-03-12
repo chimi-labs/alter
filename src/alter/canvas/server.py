@@ -149,24 +149,36 @@ def _migration_sql(staging: StagingManager) -> str:
                     )
 
         elif ch.type == "add_relation":
-            rel = ch.details.get("relation")
-            if rel:
-                on_del = f" ON DELETE {rel['on_delete']}" if rel.get("on_delete") else ""
-                constraint = f"fk_{rel['from_table']}_{rel['from_column']}_{rel['to_table']}"
+            to_str = ch.details.get("to", "")
+            if ch.table and ch.column and "." in to_str:
+                to_table, to_column = to_str.split(".", 1)
+                on_delete = ""
+                for r in prop.relations:
+                    if (r.from_table == ch.table and r.from_column == ch.column
+                            and r.to_table == to_table and r.to_column == to_column):
+                        if r.on_delete:
+                            on_delete = f" ON DELETE {r.on_delete}"
+                        break
+                constraint = f"fk_{ch.table}_{ch.column}_{to_table}"
                 lines.append(
-                    f"ALTER TABLE {rel['from_table']} ADD CONSTRAINT "
+                    f"ALTER TABLE {ch.table} ADD CONSTRAINT "
                     f"{constraint} "
-                    f"FOREIGN KEY ({rel['from_column']}) "
-                    f"REFERENCES {rel['to_table']} ({rel['to_column']})"
-                    f"{on_del};\n"
+                    f"FOREIGN KEY ({ch.column}) "
+                    f"REFERENCES {to_table} ({to_column})"
+                    f"{on_delete};\n"
                 )
 
         elif ch.type == "drop_relation":
-            rel = ch.details.get("relation")
-            if rel:
+            to_str = ch.details.get("to", "")
+            if ch.table and ch.column:
+                to_table = to_str.split(".", 1)[0] if "." in to_str else ""
+                constraint = (
+                    f"fk_{ch.table}_{ch.column}_{to_table}"
+                    if to_table else
+                    f"fk_{ch.table}_{ch.column}"
+                )
                 lines.append(
-                    f"ALTER TABLE {rel['from_table']} DROP CONSTRAINT "
-                    f"fk_{rel['from_table']}_{rel['from_column']};\n"
+                    f"ALTER TABLE {ch.table} DROP CONSTRAINT {constraint};\n"
                 )
 
     return "\n".join(lines)
