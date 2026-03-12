@@ -212,6 +212,48 @@ def _migration_sql(staging: StagingManager) -> str:
                     f"ALTER TABLE {ch.table} DROP CONSTRAINT {constraint};\n"
                 )
 
+        elif ch.type == "add_index":
+            if ch.table and ch.column:
+                tbl = prop_tables.get(ch.table)
+                qualified = (
+                    f"{tbl.schema_name}.{ch.table}"
+                    if tbl and tbl.schema_name else ch.table
+                )
+                lines.append(
+                    f"CREATE INDEX idx_{ch.table}_{ch.column}"
+                    f" ON {qualified} ({ch.column});\n"
+                )
+
+        elif ch.type == "drop_index":
+            if ch.table and ch.column:
+                lines.append(
+                    f"DROP INDEX IF EXISTS idx_{ch.table}_{ch.column};\n"
+                )
+
+        elif ch.type == "add_enum":
+            from alter.schema import EnumMember as _EnumMember
+            enum_def = next((e for e in prop.enums if e.name == ch.table), None)
+            if enum_def:
+                values = ", ".join(
+                    f"'{v.value if isinstance(v, _EnumMember) else v}'"
+                    for v in enum_def.values
+                )
+                lines.append(f"CREATE TYPE {ch.table} AS ENUM ({values});\n")
+
+        elif ch.type == "drop_enum":
+            lines.append(f"DROP TYPE IF EXISTS {ch.table};\n")
+
+        elif ch.type == "modify_enum":
+            from alter.schema import EnumMember as _EnumMember
+            lines.append(f"-- Enum '{ch.table}' modified; review values manually\n")
+            enum_def = next((e for e in prop.enums if e.name == ch.table), None)
+            if enum_def:
+                for v in enum_def.values:
+                    val = v.value if isinstance(v, _EnumMember) else v
+                    lines.append(
+                        f"ALTER TYPE {ch.table} ADD VALUE IF NOT EXISTS '{val}';\n"
+                    )
+
     return "\n".join(lines)
 
 
