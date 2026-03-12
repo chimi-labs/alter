@@ -51,6 +51,101 @@ def _get_field_stmts(class_source: str) -> list[tuple[str, int, int]]:
     return results
 
 
+def _get_bare_field_stmts(class_source: str) -> list[tuple[str, int, int]]:
+    """Return (col_name, start_lineno, end_lineno) for AnnAssign statements that
+    are bare type annotations or have simple literal defaults — NOT ``Field()``
+    or ``mapped_column()`` calls.
+
+    Matches:
+      body: str                              (no value — bare annotation)
+      count: int = 0                         (ast.Constant literal default)
+      optional_field: Optional[str] = None   (ast.Constant(None) default)
+
+    Line numbers are 1-indexed and relative to *class_source*.
+    """
+    try:
+        tree = ast.parse(class_source)
+    except SyntaxError:
+        return []
+
+    cls = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)),
+        None,
+    )
+    if cls is None:
+        return []
+
+    results: list[tuple[str, int, int]] = []
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.AnnAssign):
+            continue
+        if isinstance(stmt.value, ast.Call):
+            continue  # Field() / mapped_column() — handled by _get_field_stmts
+        if not isinstance(stmt.target, ast.Name):
+            continue
+        # Accept: no value (bare) or a simple constant/None literal
+        if stmt.value is None or isinstance(stmt.value, ast.Constant):
+            results.append((stmt.target.id, stmt.lineno, stmt.end_lineno))
+    return results
+
+
+def _bare_field_default(bare_text: str) -> str | None:
+    """Return the ``ast.unparse``'d default value from a bare/simple-default field
+    line, or ``None`` if the field has no explicit default.
+
+    E.g. ``"    count: int = 0"``  →  ``"0"``
+         ``"    opt: Optional[str] = None"``  →  ``"None"``
+         ``"    body: str"``  →  ``None``
+    """
+    try:
+        tree = ast.parse(bare_text.strip())
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign):
+            if node.value is None:
+                return None
+            if isinstance(node.value, ast.Constant):
+                return ast.unparse(node.value)
+    return None
+
+
+def _bare_field_equivalent(bare_text: str, generated_line: str) -> bool:
+    """Return ``True`` if a bare annotation / simple-default field line is
+    semantically equivalent to a generated ``Field(...)`` line, meaning
+    no schema change needs to be applied.
+
+    Equivalence rules:
+    * ``name: Type``  ↔  ``name: Type = Field()``          (no kwargs)
+    * ``name: Type = None``  ↔  ``name: Type = Field(default=None)``
+    * ``name: Type = <constant>``  ↔  ``name: Type = Field(default=<constant>)``
+      (only when generated kwargs are exactly ``{default: <constant>}``)
+
+    Any generated kwargs beyond a matching ``default`` (e.g. ``max_length``,
+    ``unique``, ``index``, ``foreign_key``) are NOT equivalent — the field
+    needs to be upgraded to a full ``Field(...)`` call.
+    """
+    gen_kw = _parse_field_kwargs(generated_line)
+    if gen_kw is None:
+        return False
+
+    bare_default = _bare_field_default(bare_text)
+
+    # Generated Field() has no kwargs at all, and bare field has no explicit
+    # default → equivalent (plain non-nullable column without special constraints)
+    if not gen_kw and bare_default is None:
+        return True
+
+    # Generated has exactly one kwarg: default=<X>.
+    # Bare has the same constant as its explicit default → equivalent.
+    if set(gen_kw.keys()) == {"default"} and bare_default is not None:
+        return gen_kw["default"] == bare_default
+
+    # All other cases (max_length, unique, index, FK, primary_key, etc.)
+    # are NOT equivalent — the bare line needs to become a full Field() call.
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Semantic Field() kwargs comparison
 # ---------------------------------------------------------------------------
@@ -376,25 +471,39 @@ def _class_needs_update(class_source: str, schema_field_lines: list[str]) -> boo
     - If any schema column is absent from the class → needs update.
     - If any schema column's Field() kwargs differ semantically → needs update.
     - kwarg-order-only differences do **not** trigger an update.
+    - Bare annotations / simple-default fields are treated as existing: no
+      update is needed when they are equivalent to the generated Field() line.
+      If the schema adds new constraints (max_length, unique, etc.) to a
+      previously bare field, that DOES trigger an update.
     - Extra columns in the file that are not in the schema → ignored (no update).
     - Non-schema lines (docstrings, Relationship, comments) → ignored entirely.
     """
     stmts = _get_field_stmts(class_source)
+    bare_stmts = _get_bare_field_stmts(class_source)
     src_lines = class_source.splitlines(keepends=True)
 
-    # Build {col_name: full existing field text} from AST-located ranges
+    # Build {col_name: full existing field text} for Field()-style fields
     existing: dict[str, str] = {}
     for col_name, start, end in stmts:
         existing[col_name] = "".join(src_lines[start - 1 : end]).rstrip()
+
+    # Build {col_name: full existing bare-field text}
+    bare_existing: dict[str, str] = {}
+    for col_name, start, end in bare_stmts:
+        bare_existing[col_name] = "".join(src_lines[start - 1 : end]).rstrip()
 
     for line in schema_field_lines:
         col_name = _col_name_from_generated(line)
         if col_name is None:
             continue
-        if col_name not in existing:
-            return True  # new column
-        if not _field_kwargs_equal(existing[col_name], line):
-            return True  # changed column
+        if col_name in existing:
+            if not _field_kwargs_equal(existing[col_name], line):
+                return True  # changed Field() column
+        elif col_name in bare_existing:
+            if not _bare_field_equivalent(bare_existing[col_name], line):
+                return True  # schema adds constraints not reflected in bare field
+        else:
+            return True  # genuinely new column
 
     return False
 
@@ -425,6 +534,7 @@ def _surgical_patch_class(
        section.
     """
     stmts = _get_field_stmts(class_source)
+    bare_stmts = _get_bare_field_stmts(class_source)
     src_lines = class_source.splitlines(keepends=True)
 
     # Build {col_name: schema_line} for lookup
@@ -437,13 +547,16 @@ def _surgical_patch_class(
             schema_order.append(col_name)
 
     existing_col_names: set[str] = {col for col, _, _ in stmts}
+    bare_col_names: set[str] = {col for col, _, _ in bare_stmts}
 
-    # Map each field stmt start-line (0-indexed) to its end-line (exclusive, 0-indexed)
-    # so we can detect multi-line spans during the walk.
-    stmt_ranges: dict[int, tuple[str, int]] = {
-        start - 1: (col, end)
-        for col, start, end in stmts
-    }  # {start_0idx: (col_name, end_0idx_exclusive)}
+    # Map each field stmt start-line (0-indexed) to (col_name, end_0idx, is_bare).
+    # is_bare=True means the existing line is a bare annotation / simple default
+    # rather than a Field() call, and requires different update logic.
+    stmt_ranges: dict[int, tuple[str, int, bool]] = {}
+    for col, start, end in stmts:
+        stmt_ranges[start - 1] = (col, end, False)
+    for col, start, end in bare_stmts:
+        stmt_ranges[start - 1] = (col, end, True)
 
     result: list[str] = []
     last_field_result_idx: int = -1
@@ -451,25 +564,43 @@ def _surgical_patch_class(
 
     while i < len(src_lines):
         if i in stmt_ranges:
-            col_name, end = stmt_ranges[i]
+            col_name, end, is_bare = stmt_ranges[i]
             # Collect the full existing field text (may span multiple lines)
             existing_text = "".join(src_lines[i:end]).rstrip()
-            if col_name in schema_map and not _field_kwargs_equal(existing_text, schema_map[col_name]):
-                # Rebuild with original kwarg order / multi-line style / LHS preserved
-                rebuilt = _rebuild_field_line(existing_text, schema_map[col_name])
-                result.append(rebuilt.rstrip() + "\n")
+
+            if is_bare:
+                if col_name in schema_map and not _bare_field_equivalent(existing_text, schema_map[col_name]):
+                    # Schema adds constraints not present in the bare annotation —
+                    # replace the bare line with the full generated Field() line,
+                    # preserving the existing indent.
+                    indent = len(existing_text) - len(existing_text.lstrip())
+                    indent_str = existing_text[:indent]
+                    new_line = schema_map[col_name].lstrip()
+                    result.append(indent_str + new_line + "\n")
+                else:
+                    # Bare field is equivalent or not in schema — keep verbatim.
+                    for ln in src_lines[i:end]:
+                        result.append(ln)
             else:
-                # Keep verbatim (unchanged field — preserves kwarg order and formatting)
-                for ln in src_lines[i:end]:
-                    result.append(ln)
+                if col_name in schema_map and not _field_kwargs_equal(existing_text, schema_map[col_name]):
+                    # Rebuild with original kwarg order / multi-line style / LHS preserved
+                    rebuilt = _rebuild_field_line(existing_text, schema_map[col_name])
+                    result.append(rebuilt.rstrip() + "\n")
+                else:
+                    # Keep verbatim (unchanged field — preserves kwarg order and formatting)
+                    for ln in src_lines[i:end]:
+                        result.append(ln)
+
             last_field_result_idx = len(result) - 1
             i = end
         else:
             result.append(src_lines[i])
             i += 1
 
-    # Insert new columns after the last Field() line
-    new_cols = [name for name in schema_order if name not in existing_col_names]
+    # Insert genuinely new columns (absent from both Field() and bare stmts) after
+    # the last existing field line.
+    all_existing_names = existing_col_names | bare_col_names
+    new_cols = [name for name in schema_order if name not in all_existing_names]
     if new_cols:
         insert_at = last_field_result_idx + 1 if last_field_result_idx >= 0 else len(result)
         for col_name in new_cols:
