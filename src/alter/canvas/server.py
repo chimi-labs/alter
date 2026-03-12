@@ -739,17 +739,44 @@ class _Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 
+_TABLE_W = 250  # approximate table card width used for overlap detection
+_TABLE_H = 280  # approximate table card height used for overlap detection
+
+
 def _auto_position_new(schema: AlterSchema) -> None:
-    """Give grid positions to any tables that are still at (0,0)."""
-    positioned = [(t.position.x, t.position.y) for t in schema.tables if not (t.position.x == 0 and t.position.y == 0)]
-    i = len(positioned)
+    """Give grid positions to any tables that are still at (0,0).
+
+    Skips grid slots that would overlap with an already-positioned table so
+    that manually-dragged tables are never covered by newly-added ones.
+    """
+    # Seed occupied set from all tables that already have a real position.
+    occupied: set[tuple[int, int]] = {
+        (t.position.x, t.position.y)
+        for t in schema.tables
+        if not (t.position.x == 0 and t.position.y == 0)
+    }
+
+    def _overlaps(x: int, y: int) -> bool:
+        for ox, oy in occupied:
+            if abs(x - ox) < _TABLE_W and abs(y - oy) < _TABLE_H:
+                return True
+        return False
+
+    i = 0
     for table in schema.tables:
         if table.position.x == 0 and table.position.y == 0:
-            col = i % _GRID_COLS
-            row = i // _GRID_COLS
-            table.position.x = _GRID_ORIGIN_X + col * _GRID_COL_W
-            table.position.y = _GRID_ORIGIN_Y + row * _GRID_ROW_H
-            i += 1
+            # Advance through grid slots until we find one that is clear.
+            while True:
+                col = i % _GRID_COLS
+                row = i // _GRID_COLS
+                x = _GRID_ORIGIN_X + col * _GRID_COL_W
+                y = _GRID_ORIGIN_Y + row * _GRID_ROW_H
+                i += 1
+                if not _overlaps(x, y):
+                    break
+            table.position.x = x
+            table.position.y = y
+            occupied.add((x, y))
 
 
 # ---------------------------------------------------------------------------
