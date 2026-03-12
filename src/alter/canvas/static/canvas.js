@@ -1430,6 +1430,40 @@ function openEnumListModal() {
   document.getElementById('modal-enum-list').hidden = false;
 }
 
+/**
+ * Extract a display string from an enum value.
+ * Handles both plain strings ("admin") and EnumMember objects
+ * ({"member_name": "ADMIN", "value": "admin"}).
+ *
+ * If member_name and value differ (case-insensitively), shows "MEMBER_NAME = value"
+ * so the user can see and edit both parts.  Otherwise shows just the value.
+ */
+function enumValueDisplay(v) {
+  if (typeof v === 'string') return v;
+  if (v && typeof v === 'object' && v.member_name !== undefined) {
+    if (v.member_name.toLowerCase() === v.value.toLowerCase()) return v.value;
+    return `${v.member_name} = ${v.value}`;
+  }
+  return String(v);
+}
+
+/**
+ * Parse one textarea line back into an EnumMember object.
+ * "ADMIN = admin"  → { member_name: "ADMIN", value: "admin" }
+ * "admin"          → { member_name: "admin", value: "admin" }
+ */
+function parseEnumValue(line) {
+  const trimmed = line.trim();
+  const eqIdx = trimmed.indexOf(' = ');
+  if (eqIdx !== -1) {
+    return {
+      member_name: trimmed.substring(0, eqIdx).trim(),
+      value: trimmed.substring(eqIdx + 3).trim(),
+    };
+  }
+  return { member_name: trimmed, value: trimmed };
+}
+
 function renderEnumList() {
   const enums = effectiveEnums();
   const container = document.getElementById('enum-list');
@@ -1449,7 +1483,7 @@ function renderEnumList() {
     nameSpan.textContent = e.name;
     const valSpan = document.createElement('span');
     valSpan.className = 'enum-row-vals';
-    valSpan.textContent = e.values.join(', ');
+    valSpan.textContent = e.values.map(enumValueDisplay).join(', ');
     const editBtn = document.createElement('button');
     editBtn.className = 'tb-btn enum-row-edit';
     editBtn.textContent = 'Edit';
@@ -1468,7 +1502,7 @@ function openEnumEditModal(existingEnum) {
   document.getElementById('input-enum-name').value =
     existingEnum ? existingEnum.name : '';
   document.getElementById('input-enum-values').value =
-    existingEnum ? existingEnum.values.join('\n') : '';
+    existingEnum ? existingEnum.values.map(enumValueDisplay).join('\n') : '';
   document.getElementById('btn-enum-edit-delete').hidden = !existingEnum;
   document.getElementById('modal-enum-edit').hidden = false;
   setTimeout(() => document.getElementById('input-enum-name').focus(), 30);
@@ -1477,7 +1511,7 @@ function openEnumEditModal(existingEnum) {
 async function enumEditSubmit() {
   const name   = document.getElementById('input-enum-name').value.trim();
   const values = document.getElementById('input-enum-values').value
-    .split('\n').map(v => v.trim()).filter(Boolean);
+    .split('\n').map(v => v.trim()).filter(Boolean).map(parseEnumValue);
   if (!name || values.length === 0) return;
 
   document.getElementById('modal-enum-edit').hidden = true;
