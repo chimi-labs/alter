@@ -139,14 +139,45 @@ def _migration_sql(staging: StagingManager) -> str:
             lines.append(f"ALTER TABLE {ch.table} DROP COLUMN {ch.column};\n")
 
         elif ch.type == "modify_column":
+            from alter.exporters.sql import _format_default
             tbl = prop_tables.get(ch.table)
             if tbl and ch.column:
                 col = next((c for c in tbl.columns if c.name == ch.column), None)
                 if col:
-                    sql_type = alter_to_sql(col.type, col.max_length)
-                    lines.append(
-                        f"ALTER TABLE {ch.table} ALTER COLUMN {ch.column} TYPE {sql_type};\n"
-                    )
+                    t, c = ch.table, ch.column
+                    if "type" in ch.details:
+                        sql_type = alter_to_sql(col.type, col.max_length)
+                        lines.append(
+                            f"ALTER TABLE {t} ALTER COLUMN {c}"
+                            f" TYPE {sql_type} USING {c}::{sql_type};\n"
+                        )
+                    if "nullable" in ch.details:
+                        _old_nullable, new_nullable = ch.details["nullable"]
+                        if new_nullable:
+                            lines.append(f"ALTER TABLE {t} ALTER COLUMN {c} DROP NOT NULL;\n")
+                        else:
+                            lines.append(f"ALTER TABLE {t} ALTER COLUMN {c} SET NOT NULL;\n")
+                    if "unique" in ch.details:
+                        _old_unique, new_unique = ch.details["unique"]
+                        if new_unique:
+                            lines.append(
+                                f"ALTER TABLE {t} ADD CONSTRAINT {t}_{c}_key UNIQUE ({c});\n"
+                            )
+                        else:
+                            lines.append(
+                                f"ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {t}_{c}_key;\n"
+                            )
+                    if "default" in ch.details:
+                        _old_default, new_default = ch.details["default"]
+                        if new_default is None:
+                            lines.append(f"ALTER TABLE {t} ALTER COLUMN {c} DROP DEFAULT;\n")
+                        else:
+                            sql_default = _format_default(new_default)
+                            if sql_default is not None:
+                                lines.append(
+                                    f"ALTER TABLE {t} ALTER COLUMN {c}"
+                                    f" SET DEFAULT {sql_default};\n"
+                                )
 
         elif ch.type == "add_relation":
             to_str = ch.details.get("to", "")
