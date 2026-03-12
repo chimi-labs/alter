@@ -135,6 +135,19 @@ _MUTABLE_DEFAULT_EQUIV: dict[tuple[str, str], tuple[str, str]] = {
     ("default", "[]"): ("default_factory", "list"),
 }
 
+# Value-level equivalences for ``default_factory``.
+# Maps the user's hand-written form → the canonical form emitted by the generator.
+# Used both in equality checks (no rewrite) and in rebuild (preserve user's form).
+_DEFAULT_FACTORY_EQUIV: dict[str, str] = {
+    # datetime.utcnow is deprecated in Python 3.12+; the generator emits the
+    # modern lambda form.  Treat both as semantically identical so existing
+    # hand-written code is never touched unless the field actually changes.
+    #
+    # NOTE: the canonical form uses the exact string produced by ast.unparse(),
+    # which inserts a space between "lambda" and ":" (i.e. "lambda :").
+    "datetime.utcnow": "lambda : datetime.now(timezone.utc)",
+}
+
 
 def _normalize_kw_for_eq(kw: dict[str, str]) -> dict[str, str]:
     """Normalise mutable-default equivalents to a single canonical form.
@@ -142,12 +155,20 @@ def _normalize_kw_for_eq(kw: dict[str, str]) -> dict[str, str]:
     ``default={}`` and ``default_factory=dict`` are semantically identical;
     normalise both to the ``default_factory`` form so that the equality check
     does not trigger a spurious rewrite.
+
+    Also normalises ``default_factory`` *value* equivalences (e.g.
+    ``datetime.utcnow`` → ``lambda: datetime.now(timezone.utc)``) so that
+    fields using the deprecated form are not spuriously rewritten just because
+    the generator produces the modern form.
     """
     result = dict(kw)
     for (old_key, old_val), (new_key, new_val) in _MUTABLE_DEFAULT_EQUIV.items():
         if result.get(old_key) == old_val:
             del result[old_key]
             result[new_key] = new_val
+    if "default_factory" in result:
+        val = result["default_factory"]
+        result["default_factory"] = _DEFAULT_FACTORY_EQUIV.get(val, val)
     return result
 
 
@@ -292,6 +313,11 @@ def _rebuild_field_line(
             val = new_kw[key]
             if key.startswith("__pos_"):
                 merged.append(val)  # positional
+            elif key == "default_factory" and _DEFAULT_FACTORY_EQUIV.get(existing_val) == val:
+                # The existing value is a known equivalent of what the generator
+                # produces (e.g. datetime.utcnow ↔ lambda: datetime.now(timezone.utc)).
+                # Preserve the user's original form so we don't introduce noisy diffs.
+                merged.append(f"default_factory={existing_val}")
             else:
                 merged.append(f"{key}={val}")
             seen.add(key)

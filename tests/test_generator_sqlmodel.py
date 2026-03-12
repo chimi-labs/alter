@@ -764,3 +764,150 @@ def test_update_models_inherited_columns_not_added_to_class_body():
     assert "class Post(UUIDBase, TimestampedBase, table=True):" in result
 
 
+
+
+# ---------------------------------------------------------------------------
+# Bug: spurious rewrite of datetime.utcnow fields (and duplicate imports)
+# ---------------------------------------------------------------------------
+
+def test_update_preserves_datetime_utcnow_no_rewrite() -> None:
+    """update_models must NOT rewrite default_factory=datetime.utcnow when the
+    field is otherwise unchanged.  The deprecated form is semantically equal to
+    the lambda form the generator produces, so no diff should occur."""
+    from alter.generators.sqlmodel import SQLModelGenerator
+    from alter.schema import AlterSchema, Column, Table
+
+    existing = dedent("""\
+        from datetime import datetime
+        from sqlmodel import Field, SQLModel
+
+        class Session(SQLModel, table=True):
+            __tablename__ = "sessions"
+
+            id: str = Field(primary_key=True)
+            created_at: datetime = Field(default_factory=datetime.utcnow)
+    """)
+    schema = AlterSchema(
+        orm="sqlmodel",
+        tables=[Table(
+            name="sessions",
+            columns=[
+                Column(name="id", type="string", primary_key=True, nullable=False),
+                Column(name="created_at", type="datetime", nullable=False, default="utcnow"),
+            ],
+        )],
+    )
+    result = SQLModelGenerator().update_models(schema, existing)
+    assert result == existing, (
+        "update_models must return the file unchanged when only datetime.utcnow is present"
+    )
+
+
+def test_update_no_duplicate_import_when_datetime_already_imported() -> None:
+    """When the file already has 'from datetime import datetime', adding a utcnow
+    column must NOT inject a duplicate 'from datetime import datetime, timezone' line."""
+    from alter.generators.sqlmodel import SQLModelGenerator
+    from alter.schema import AlterSchema, Column, Table
+
+    existing = dedent("""\
+        from datetime import datetime
+        from sqlmodel import Field, SQLModel
+
+        class Session(SQLModel, table=True):
+            __tablename__ = "sessions"
+
+            id: str = Field(primary_key=True)
+            created_at: datetime = Field(default_factory=datetime.utcnow)
+    """)
+    schema = AlterSchema(
+        orm="sqlmodel",
+        tables=[Table(
+            name="sessions",
+            columns=[
+                Column(name="id", type="string", primary_key=True, nullable=False),
+                Column(name="created_at", type="datetime", nullable=False, default="utcnow"),
+            ],
+        )],
+    )
+    result = SQLModelGenerator().update_models(schema, existing)
+    # datetime must appear exactly once in imports
+    import_lines = [l for l in result.splitlines() if "from datetime import" in l]
+    assert len(import_lines) == 1, f"Expected 1 datetime import line, got: {import_lines}"
+
+
+def test_update_preserves_utcnow_when_other_field_changes() -> None:
+    """Even when a rebuild IS triggered (another field changed), the
+    default_factory=datetime.utcnow form must be preserved verbatim."""
+    from alter.generators.sqlmodel import SQLModelGenerator
+    from alter.schema import AlterSchema, Column, Table
+
+    existing = dedent("""\
+        from datetime import datetime
+        from sqlmodel import Field, SQLModel
+
+        class Event(SQLModel, table=True):
+            __tablename__ = "events"
+
+            id: str = Field(primary_key=True)
+            name: str = Field()
+            created_at: datetime = Field(default_factory=datetime.utcnow)
+    """)
+    # Change: name gets max_length=200 added
+    schema = AlterSchema(
+        orm="sqlmodel",
+        tables=[Table(
+            name="events",
+            columns=[
+                Column(name="id", type="string", primary_key=True, nullable=False),
+                Column(name="name", type="string", nullable=False, max_length=200),
+                Column(name="created_at", type="datetime", nullable=False, default="utcnow"),
+            ],
+        )],
+    )
+    result = SQLModelGenerator().update_models(schema, existing)
+    assert "default_factory=datetime.utcnow" in result, (
+        "datetime.utcnow should be preserved even when another field is rebuilt"
+    )
+    assert "lambda: datetime.now(timezone.utc)" not in result
+
+
+def test_update_new_table_does_not_touch_utcnow_in_existing_table() -> None:
+    """Adding a new table must leave existing tables with datetime.utcnow untouched."""
+    from alter.generators.sqlmodel import SQLModelGenerator
+    from alter.schema import AlterSchema, Column, Table
+
+    existing = dedent("""\
+        from datetime import datetime
+        from sqlmodel import Field, SQLModel
+
+        class Session(SQLModel, table=True):
+            __tablename__ = "sessions"
+
+            id: str = Field(primary_key=True)
+            created_at: datetime = Field(default_factory=datetime.utcnow)
+    """)
+    schema = AlterSchema(
+        orm="sqlmodel",
+        tables=[
+            Table(
+                name="sessions",
+                columns=[
+                    Column(name="id", type="string", primary_key=True, nullable=False),
+                    Column(name="created_at", type="datetime", nullable=False, default="utcnow"),
+                ],
+            ),
+            Table(
+                name="users",
+                columns=[
+                    Column(name="id", type="string", primary_key=True, nullable=False),
+                    Column(name="email", type="string", nullable=False),
+                ],
+            ),
+        ],
+    )
+    result = SQLModelGenerator().update_models(schema, existing)
+    # Existing class must be completely untouched
+    assert "default_factory=datetime.utcnow" in result
+    assert "lambda: datetime.now(timezone.utc)" not in result
+    # New class appended
+    assert "class Users(SQLModel, table=True):" in result or "class User(SQLModel, table=True):" in result

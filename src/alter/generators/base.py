@@ -67,6 +67,32 @@ def _imported_names(tree: ast.Module) -> set[str]:
     return names
 
 
+def _any_name_referenced(import_line: str, referenced: set[str]) -> bool:
+    """Return True if at least one name exported by *import_line* appears in
+    *referenced* (the set of identifier names used in non-import statements).
+
+    Used by ``_insert_missing_imports`` to avoid injecting imports whose names
+    are not actually used in the code body (e.g. ``timezone`` when the
+    surgical updater preserved ``datetime.utcnow`` rather than rewriting it).
+    """
+    try:
+        line_tree = ast.parse(import_line)
+    except SyntaxError:
+        return True  # can't tell — include it to be safe
+    for node in ast.walk(line_tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = alias.asname if alias.asname else alias.name.split(".")[0]
+                if name in referenced:
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                name = alias.asname if alias.asname else alias.name
+                if name in referenced:
+                    return True
+    return False
+
+
 def _collect_stdlib_imports(
     schema: AlterSchema,
     enum_names: set[str],
@@ -215,7 +241,16 @@ class BaseGenerator(ABC):
         tree: ast.Module,
         emit_enum_names: set[str] | None = None,
     ) -> list[str]:
-        """Return import lines that are needed but not yet present in *tree*."""
+        """Return import lines that are needed but not yet present in *tree*.
+
+        When a ``from X import a, b`` line is needed but *some* of its names are
+        already imported (e.g. ``datetime`` is present but ``timezone`` is not),
+        emits only ``from X import <missing_names>`` rather than the full line.
+        This prevents duplicate imports like::
+
+            from datetime import datetime          # already in file
+            from datetime import datetime, timezone  # spurious duplicate
+        """
         present = _imported_names(tree)
         needed = self._build_imports(schema, enum_names, emit_enum_names=emit_enum_names)
         missing: list[str] = []
@@ -225,6 +260,7 @@ class BaseGenerator(ABC):
             except SyntaxError:
                 continue
             line_names: set[str] = set()
+            from_module: str | None = None
             for node in ast.walk(line_tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
@@ -232,10 +268,18 @@ class BaseGenerator(ABC):
                             alias.asname if alias.asname else alias.name.split(".")[0]
                         )
                 elif isinstance(node, ast.ImportFrom):
+                    from_module = node.module
                     for alias in node.names:
                         line_names.add(alias.asname if alias.asname else alias.name)
-            if not line_names.issubset(present):
+            absent = line_names - present
+            if not absent:
+                continue  # every name already imported — skip
+            if absent == line_names or from_module is None:
+                # Nothing from this import is present yet — add the full line
                 missing.append(line)
+            else:
+                # Only some names are missing — add a reduced import for just those
+                missing.append(f"from {from_module} import {', '.join(sorted(absent))}")
         return missing
 
     def _insert_missing_imports(
@@ -245,7 +289,14 @@ class BaseGenerator(ABC):
         enum_names: set[str],
         emit_enum_names: set[str] | None = None,
     ) -> str:
-        """Insert any missing import lines immediately after the last existing import."""
+        """Insert any missing import lines immediately after the last existing import.
+
+        After computing which imports are missing, filters out any whose exported
+        names do not appear anywhere in the code body.  This prevents spurious
+        injections like ``from datetime import timezone`` when the surgical updater
+        preserved the original ``datetime.utcnow`` form (which doesn't use
+        ``timezone``) rather than rewriting it to the lambda form.
+        """
         try:
             tree = ast.parse(code)
         except SyntaxError:
@@ -254,6 +305,26 @@ class BaseGenerator(ABC):
         missing = self._collect_missing_imports(
             schema, enum_names, tree, emit_enum_names=emit_enum_names
         )
+        if not missing:
+            return code
+
+        # Filter: only keep an import line if at least one of the names it
+        # provides is actually referenced somewhere in the code (outside of
+        # import statements themselves).  This avoids injecting e.g.
+        # `from datetime import timezone` when no generated line uses `timezone`.
+        # Build a set of all identifiers that appear in non-import statements.
+        referenced: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            if isinstance(node, ast.Name):
+                referenced.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                referenced.add(node.attr)
+        missing = [
+            line for line in missing
+            if _any_name_referenced(line, referenced)
+        ]
         if not missing:
             return code
 
