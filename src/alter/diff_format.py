@@ -35,6 +35,11 @@ def changes_to_markdown(changes: list["SchemaChange"]) -> str:
         "Modified Columns": [],
         "Added Relations": [],
         "Dropped Relations": [],
+        "Added Indexes": [],
+        "Dropped Indexes": [],
+        "Added Enums": [],
+        "Dropped Enums": [],
+        "Modified Enums": [],
     }
 
     for ch in changes:
@@ -64,6 +69,16 @@ def changes_to_markdown(changes: list["SchemaChange"]) -> str:
             sections["Dropped Relations"].append(
                 f"- ~~`{ch.table}.{ch.column}`~~ ⚠️ destructive"
             )
+        elif ch.type == "add_index":
+            sections["Added Indexes"].append(f"- `{ch.table}.{ch.column}`")
+        elif ch.type == "drop_index":
+            sections["Dropped Indexes"].append(f"- ~~`{ch.table}.{ch.column}`~~")
+        elif ch.type == "add_enum":
+            sections["Added Enums"].append(f"- `{ch.table}`")
+        elif ch.type == "drop_enum":
+            sections["Dropped Enums"].append(f"- ~~`{ch.table}`~~ ⚠️ destructive")
+        elif ch.type == "modify_enum":
+            sections["Modified Enums"].append(f"- `{ch.table}`")
 
     lines = ["## Schema Changes\n"]
     for heading, items in sections.items():
