@@ -507,24 +507,6 @@ class _Handler(BaseHTTPRequestHandler):
                     if not any(e.name == ename for e in s.enums):
                         s.enums.append(EnumDef(name=ename, values=values))
 
-                elif op == "edit_enum":
-                    ename = payload["name"]
-                    updates = payload.get("updates", {})
-                    enum = next((e for e in s.enums if e.name == ename), None)
-                    if enum:
-                        new_name = updates.get("name")
-                        if new_name and new_name != ename:
-                            enum.name = new_name
-                        if "values" in updates:
-                            enum.values = EnumDef(
-                                name=enum.name,
-                                values=updates["values"],
-                            ).values  # run normalise_values validator
-
-                elif op == "drop_enum":
-                    ename = payload["name"]
-                    s.enums = [e for e in s.enums if e.name != ename]
-
                 return s
 
             staging.propose(apply)

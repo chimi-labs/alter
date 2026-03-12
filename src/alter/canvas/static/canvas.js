@@ -1484,26 +1484,18 @@ function renderEnumList() {
     const valSpan = document.createElement('span');
     valSpan.className = 'enum-row-vals';
     valSpan.textContent = e.values.map(enumValueDisplay).join(', ');
-    const editBtn = document.createElement('button');
-    editBtn.className = 'tb-btn enum-row-edit';
-    editBtn.textContent = 'Edit';
-    editBtn.addEventListener('click', () => openEnumEditModal(e));
     row.appendChild(nameSpan);
     row.appendChild(valSpan);
-    row.appendChild(editBtn);
     container.appendChild(row);
   }
 }
 
-function openEnumEditModal(existingEnum) {
-  _enumEditName = existingEnum ? existingEnum.name : null;
-  document.getElementById('modal-enum-edit-title').textContent =
-    existingEnum ? `Edit Enum — ${existingEnum.name}` : 'New Enum';
-  document.getElementById('input-enum-name').value =
-    existingEnum ? existingEnum.name : '';
-  document.getElementById('input-enum-values').value =
-    existingEnum ? existingEnum.values.map(enumValueDisplay).join('\n') : '';
-  document.getElementById('btn-enum-edit-delete').hidden = !existingEnum;
+function openEnumEditModal() {
+  _enumEditName = null;
+  document.getElementById('modal-enum-edit-title').textContent = 'New Enum';
+  document.getElementById('input-enum-name').value = '';
+  document.getElementById('input-enum-values').value = '';
+  document.getElementById('btn-enum-edit-delete').hidden = true;
   document.getElementById('modal-enum-edit').hidden = false;
   setTimeout(() => document.getElementById('input-enum-name').focus(), 30);
 }
@@ -1516,37 +1508,13 @@ async function enumEditSubmit() {
 
   document.getElementById('modal-enum-edit').hidden = true;
 
-  if (_enumEditName === null) {
-    // Create
-    await fetch('/api/propose', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'add_enum', name, values }),
-    });
-  } else {
-    // Update
-    const updates = {};
-    if (name !== _enumEditName) updates.name = name;
-    updates.values = values;
-    await fetch('/api/propose', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'edit_enum', name: _enumEditName, updates }),
-    });
-  }
+  await fetch('/api/propose', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ op: 'add_enum', name, values }),
+  });
 
   await refreshSchema();
   // Re-render the list if it's still open
-  if (!document.getElementById('modal-enum-list').hidden) renderEnumList();
-}
-
-async function enumDeleteSubmit() {
-  if (!_enumEditName) return;
-  const name = _enumEditName;
-  document.getElementById('modal-enum-edit').hidden = true;
-  await fetch('/api/propose', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ op: 'drop_enum', name }),
-  });
-  await refreshSchema();
   if (!document.getElementById('modal-enum-list').hidden) renderEnumList();
 }
 
