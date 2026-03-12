@@ -629,6 +629,12 @@ def remove_entity(table: str, column: str | None = None) -> str:
             s.relations = [
                 r for r in s.relations if r.from_table != table and r.to_table != table
             ]
+            # Clear Column.foreign_key strings that pointed at the dropped table
+            prefix = table + "."
+            for t in s.tables:
+                for col in t.columns:
+                    if col.foreign_key and col.foreign_key.startswith(prefix):
+                        col.foreign_key = None
         else:
             # Drop column
             tbl = next((t for t in s.tables if t.name == table), None)
@@ -637,6 +643,18 @@ def remove_entity(table: str, column: str | None = None) -> str:
             if not any(c.name == column for c in tbl.columns):
                 raise ValueError(f"Column '{column}' not found in '{table}'")
             tbl.columns = [c for c in tbl.columns if c.name != column]
+            # Remove relations that reference the dropped column
+            s.relations = [
+                r for r in s.relations
+                if not (r.from_table == table and r.from_column == column)
+                and not (r.to_table == table and r.to_column == column)
+            ]
+            # Clear Column.foreign_key strings that pointed at this column
+            fk_ref = f"{table}.{column}"
+            for t in s.tables:
+                for col in t.columns:
+                    if col.foreign_key == fk_ref:
+                        col.foreign_key = None
         return s
 
     try:
