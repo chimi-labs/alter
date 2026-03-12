@@ -2,6 +2,51 @@
 
 All notable changes to Alter are documented here.
 
+## [0.1.6] — 2026-03-12
+
+### Fixed
+
+#### Generators emit deprecated `datetime.utcnow` (Python 3.12+)
+
+- Both the SQLModel and SQLAlchemy generators now emit
+  `lambda: datetime.now(timezone.utc)` instead of the bare
+  `datetime.utcnow` reference, which was deprecated in Python 3.12 and
+  will raise a `DeprecationWarning` at runtime.  The `_build_imports`
+  helper in each generator now also adds `timezone` to the
+  `from datetime import …` line whenever a `utcnow` default is present,
+  so the generated file is always importable without manual edits.
+
+### Added
+
+#### `AlterSchema(strict=False)` — opt-out from constructor type validation
+
+- `AlterSchema` now accepts a `strict: bool = True` keyword argument.
+  When `strict=False` the `validate_enum_references` model validator is
+  skipped, so schemas that reference types not yet in the type registry
+  (e.g. during incremental parsing or test fixtures) can be constructed
+  without raising `ValueError`.  The field is excluded from JSON
+  serialisation so existing `.alter` files are unaffected.
+
+### Internal
+
+- Extracted `changes_to_markdown()` into a new `alter/diff_format.py`
+  module, removing an unnecessary import coupling between the CLI and the
+  MCP server.
+- Moved shared AST helpers (`_FileResult`, `_is_enum_class`,
+  `_parse_enum_class`, `_get_table_schema`, `_node_to_name`,
+  `_node_to_type_str`, `_const_bool`, `_make_relation`) and three
+  concrete `BaseParser` methods (`_search_roots`, `_collect_import_deps`,
+  `_phase1_collect_enums`) into `parsers/base.py`, eliminating the
+  duplication between the SQLModel and SQLAlchemy parsers.
+- Moved shared generator helpers (`_class_name`, `_safe_member_name`,
+  `generate_enum_class`, `_imported_names`, `_collect_stdlib_imports`)
+  and three concrete `BaseGenerator` methods (`_collect_missing_imports`,
+  `_insert_missing_imports`, `preview_apply`) into `generators/base.py`.
+  Each ORM backend now only implements `_build_imports` with its own
+  specific import lines.
+- Removed the empty `alter/file_watcher.py` stub (file-watching logic
+  lives in `canvas/server.py`).
+
 ## [0.1.5] — 2026-03-11
 
 ### Fixed
