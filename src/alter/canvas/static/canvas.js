@@ -1535,7 +1535,6 @@ function setupEnums() {
     document.getElementById('modal-enum-edit').hidden = true;
   });
   document.getElementById('btn-enum-edit-ok').addEventListener('click', enumEditSubmit);
-  document.getElementById('btn-enum-edit-delete').addEventListener('click', enumDeleteSubmit);
   document.getElementById('modal-enum-edit').addEventListener('click', e => {
     if (e.target === e.currentTarget) e.currentTarget.hidden = true;
   });
