@@ -20,11 +20,28 @@ from alter.errors import AlterError
 
 
 def _find_alter_file(cwd: Path) -> Path | None:
-    """Search *cwd* and two parent levels for a *.alter file."""
+    """Search *cwd* and two parent levels for a *.alter file.
+
+    Prefers ``schema.alter`` when multiple files are found.  Warns to stderr
+    when there are multiple matches and none is named ``schema.alter``.
+    """
     for directory in [cwd, cwd.parent, cwd.parent.parent]:
         matches = sorted(directory.glob("*.alter"))
-        if matches:
-            return matches[0]
+        if not matches:
+            continue
+        # Prefer the canonical default name when it exists
+        for m in matches:
+            if m.name == "schema.alter":
+                return m
+        # Multiple ambiguous files — warn but still pick the first
+        if len(matches) > 1:
+            click.echo(
+                f"  ⚠  Multiple .alter files found in {directory}: "
+                f"{', '.join(m.name for m in matches)}. "
+                f"Using {matches[0].name}. Pass --file to specify.",
+                err=True,
+            )
+        return matches[0]
     return None
 
 
