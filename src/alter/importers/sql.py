@@ -7,6 +7,7 @@ produced by pgAdmin, DBeaver, DataGrip, and other tooling.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Optional
 
 import sqlparse
@@ -15,6 +16,20 @@ from sqlparse.tokens import Keyword, DDL, Punctuation
 
 from alter.schema import AlterSchema, Column, Relation, Table, Position
 from alter.types import sql_to_alter
+
+
+@dataclass
+class ImportResult:
+    """Return value of :func:`import_sql`.
+
+    Attributes:
+        schema:   The parsed :class:`~alter.schema.AlterSchema`.
+        warnings: Human-readable messages about columns whose SQL types were
+                  not recognised and defaulted to ``"string"``.
+    """
+
+    schema: AlterSchema
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -37,19 +52,22 @@ def _auto_position(index: int) -> Position:
 # ---------------------------------------------------------------------------
 
 
-def import_sql(sql: str, orm: str = "sqlmodel") -> AlterSchema:
-    """Parse *sql* (one or more ``CREATE TABLE`` statements) → ``AlterSchema``.
+def import_sql(sql: str, orm: str = "sqlmodel") -> ImportResult:
+    """Parse *sql* (one or more ``CREATE TABLE`` statements) → :class:`ImportResult`.
 
     Args:
         sql:  Raw SQL DDL string.
         orm:  ORM to record in the resulting schema (default ``"sqlmodel"``).
 
     Returns:
-        An ``AlterSchema`` with tables, columns, and relations extracted from
-        the DDL. Table positions are auto-assigned on a grid.
+        An :class:`ImportResult` whose ``schema`` contains tables, columns,
+        and relations extracted from the DDL (table positions are auto-assigned
+        on a grid) and whose ``warnings`` lists any columns whose SQL type was
+        not recognised and defaulted to ``"string"``.
     """
     tables: list[Table] = []
     relations: list[Relation] = []
+    all_warnings: list[str] = []
 
     statements = sqlparse.parse(sql)
     table_index = 0
@@ -58,9 +76,11 @@ def import_sql(sql: str, orm: str = "sqlmodel") -> AlterSchema:
         if not _is_create_table(stmt):
             continue
 
-        table_name, columns, fks = _parse_create_table(stmt)
+        table_name, columns, fks, warnings = _parse_create_table(stmt)
         if table_name is None:
             continue
+
+        all_warnings.extend(warnings)
 
         tables.append(
             Table(
@@ -86,7 +106,10 @@ def import_sql(sql: str, orm: str = "sqlmodel") -> AlterSchema:
                 )
             )
 
-    return AlterSchema(orm=orm, tables=tables, relations=relations)
+    return ImportResult(
+        schema=AlterSchema(orm=orm, tables=tables, relations=relations),
+        warnings=all_warnings,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -117,25 +140,26 @@ _TABLE_NAME_RE = re.compile(
 
 def _parse_create_table(
     stmt: Statement,
-) -> tuple[str | None, list[Column], list[dict]]:
-    """Extract table name, columns, and inline FK constraints from a statement."""
+) -> tuple[str | None, list[Column], list[dict], list[str]]:
+    """Extract table name, columns, FK constraints, and warnings from a statement."""
     raw = str(stmt).strip()
 
     m = _TABLE_NAME_RE.search(raw)
     if not m:
-        return None, [], []
+        return None, [], [], []
     table_name = m.group(2)
 
     # Extract the body between the first ( and matching )
     paren = _find_paren(stmt)
     if paren is None:
-        return table_name, [], []
+        return table_name, [], [], []
 
     body = str(paren)[1:-1]  # strip outer ( )
     column_defs = _split_column_defs(body)
 
     columns: list[Column] = []
     fks: list[dict] = []
+    warnings: list[str] = []
     pk_cols: set[str] = set()
 
     # First pass: collect table-level PRIMARY KEY constraints
@@ -169,15 +193,16 @@ def _parse_create_table(
                     fks.append(fk)
             continue
 
-        col = _parse_column_def(defn_stripped, pk_cols)
+        col, col_warnings = _parse_column_def(defn_stripped, pk_cols, table_name)
         if col:
             columns.append(col)
+            warnings.extend(col_warnings)
             # Inline REFERENCES → add FK
             fk = _extract_inline_fk(defn_stripped, col.name)
             if fk:
                 fks.append(fk)
 
-    return table_name, columns, fks
+    return table_name, columns, fks, warnings
 
 
 def _find_paren(stmt: Statement) -> Optional[Parenthesis]:
@@ -280,11 +305,13 @@ _DEFAULT_RE = re.compile(
 )
 
 
-def _parse_column_def(defn: str, pk_cols: set[str]) -> Column | None:
-    """Parse one column definition line into a ``Column``."""
+def _parse_column_def(
+    defn: str, pk_cols: set[str], table_name: str = ""
+) -> tuple[Column | None, list[str]]:
+    """Parse one column definition line into a ``Column`` and any warnings."""
     m = _COL_DEF_RE.match(defn)
     if not m:
-        return None
+        return None, []
 
     col_name = m.group(1)
     raw_type_full = m.group(2).strip()
@@ -303,11 +330,17 @@ def _parse_column_def(defn: str, pk_cols: set[str]) -> Column | None:
 
     rest_upper = rest.upper()
 
-    # Resolve type (fall back to "string" for unrecognised SQL types)
+    # Resolve type — warn and fall back to "string" for unrecognised SQL types.
+    warnings: list[str] = []
     try:
         alter_type = sql_to_alter(raw_type.upper())
     except KeyError:
         alter_type = "string"
+        location = f"{table_name}.{col_name}" if table_name else col_name
+        warnings.append(
+            f"Unknown SQL type '{raw_type}' for column '{location}'"
+            f" — defaulting to 'string'"
+        )
 
     # max_length from size
     max_length: int | None = None
@@ -341,7 +374,7 @@ def _parse_column_def(defn: str, pk_cols: set[str]) -> Column | None:
 
     # Skip REFERENCES part in the type string
     if "REFERENCES" in raw_type.upper():
-        return None
+        return None, warnings
 
     return Column(
         name=col_name,
@@ -351,4 +384,4 @@ def _parse_column_def(defn: str, pk_cols: set[str]) -> Column | None:
         unique=unique,
         default=default,
         max_length=max_length,
-    )
+    ), warnings

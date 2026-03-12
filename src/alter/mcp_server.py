@@ -908,6 +908,7 @@ def import_schema(source: str, format: str = "sql") -> str:
     staging = _get_staging()
 
     try:
+        import_warnings: list[str] = []
         if format == "alter":
             from alter.importers.alter_file import import_alter_file  # noqa: PLC0415
 
@@ -921,7 +922,9 @@ def import_schema(source: str, format: str = "sql") -> str:
             # Accept a file path or raw SQL text
             src_path = Path(source)
             sql_text = src_path.read_text() if src_path.exists() else source
-            imported = import_sql(sql_text, orm=staging.current_schema.orm)
+            sql_result = import_sql(sql_text, orm=staging.current_schema.orm)
+            imported = sql_result.schema
+            import_warnings = sql_result.warnings
 
     except (AlterError, Exception) as exc:
         return f"Error importing schema: {exc}"
@@ -947,7 +950,11 @@ def import_schema(source: str, format: str = "sql") -> str:
     staging.propose(apply)
 
     skip_note = f" ({skipped_count} skipped — already in schema)" if skipped_count else ""
-    return f"Imported {new_count} new tables{skip_note} from {format.upper()}."
+    msg = f"Imported {new_count} new tables{skip_note} from {format.upper()}."
+    if import_warnings:
+        warning_lines = "\n".join(f"⚠ {w}" for w in import_warnings)
+        msg = f"{msg}\n\nWarnings:\n{warning_lines}"
+    return msg
 
 
 @mcp.tool()

@@ -606,15 +606,21 @@ def import_cmd(source: str, alter_file: str | None, fmt: str | None) -> None:
         if fmt == "alter":
             from alter.importers.alter_file import import_alter_file
             imported = import_alter_file(src_path)
+            import_warnings: list[str] = []
         else:
             from alter.importers.sql import import_sql
             from alter.schema import AlterSchema
             current_orm = AlterSchema.load(path).orm
-            imported = import_sql(src_path.read_text(), orm=current_orm)
+            result = import_sql(src_path.read_text(), orm=current_orm)
+            imported = result.schema
+            import_warnings = result.warnings
     except AlterError as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:
         raise click.ClickException(f"Import error: {exc}") from exc
+
+    for w in import_warnings:
+        click.echo(f"  ⚠  {w}", err=True)
 
     from alter.staging import StagingManager
     import copy

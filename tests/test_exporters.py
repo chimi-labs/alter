@@ -362,7 +362,7 @@ class TestSqlRoundTrip:
         """Exported SQL, when re-imported, yields the same table names."""
         original = _schema_with_fk()
         sql = export_sql(original)
-        reimported = import_sql(sql)
+        reimported = import_sql(sql).schema
 
         orig_names = {t.name for t in original.tables}
         new_names = {t.name for t in reimported.tables}
@@ -371,7 +371,7 @@ class TestSqlRoundTrip:
     def test_column_names_preserved(self):
         original = _simple_schema()
         sql = export_sql(original)
-        reimported = import_sql(sql)
+        reimported = import_sql(sql).schema
 
         orig_cols = {c.name for c in original.tables[0].columns}
         new_cols = {c.name for c in reimported.tables[0].columns}
@@ -380,7 +380,7 @@ class TestSqlRoundTrip:
     def test_primary_key_preserved(self):
         original = _simple_schema()
         sql = export_sql(original)
-        reimported = import_sql(sql)
+        reimported = import_sql(sql).schema
 
         pk_cols = [c for c in reimported.tables[0].columns if c.primary_key]
         assert len(pk_cols) == 1
@@ -390,7 +390,7 @@ class TestSqlRoundTrip:
         """FK relations are reconstructed from FOREIGN KEY clauses in the SQL."""
         original = _schema_with_fk()
         sql = export_sql(original)
-        reimported = import_sql(sql)
+        reimported = import_sql(sql).schema
 
         assert len(reimported.relations) >= 1
         rel = next(
@@ -402,7 +402,7 @@ class TestSqlRoundTrip:
     def test_unique_constraint_preserved(self):
         original = _simple_schema()
         sql = export_sql(original)
-        reimported = import_sql(sql)
+        reimported = import_sql(sql).schema
 
         email = next(
             (c for c in reimported.tables[0].columns if c.name == "email"), None
@@ -413,7 +413,7 @@ class TestSqlRoundTrip:
     def test_not_null_preserved(self):
         original = _simple_schema()
         sql = export_sql(original)
-        reimported = import_sql(sql)
+        reimported = import_sql(sql).schema
 
         email = next(
             (c for c in reimported.tables[0].columns if c.name == "email"), None
