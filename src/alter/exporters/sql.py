@@ -46,7 +46,16 @@ def export_sql(schema: AlterSchema) -> str:
     # Build table lookup by name so FK REFERENCES can use the qualified name.
     table_by_name: dict[str, Table] = {t.name: t for t in schema.tables}
 
-    parts = [_table_to_sql(table, rel_index, table_by_name) for table in schema.tables]
+    parts: list[str] = []
+    for table in schema.tables:
+        qualified = _qualified_name(table)
+        parts.append(_table_to_sql(table, rel_index, table_by_name))
+        for col in table.columns:
+            if col.index and not col.primary_key:
+                parts.append(
+                    f"CREATE INDEX idx_{table.name}_{col.name}"
+                    f" ON {qualified} ({col.name});"
+                )
     if not parts:
         return ""
     return "\n\n".join(parts) + "\n"
