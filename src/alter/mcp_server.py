@@ -492,6 +492,38 @@ def add_column(
             raise ValueError(f"Table '{table}' not found")
         if any(c.name == name for c in tbl.columns):
             raise ValueError(f"Column '{name}' already exists in '{table}'")
+
+        # Validate FK target BEFORE touching the schema so a bad FK never
+        # leaves a partial column or a dangling relation behind.
+        relation: Relation | None = None
+        if foreign_key:
+            parts = foreign_key.rsplit(".", 1)
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Invalid foreign_key format '{foreign_key}': expected 'table.column'."
+                )
+            to_table_raw, to_column = parts
+            to_table = to_table_raw.rsplit(".", 1)[-1]  # strip optional schema prefix
+            target_tbl = next((t for t in s.tables if t.name == to_table), None)
+            if target_tbl is None:
+                raise ValueError(
+                    f"FK target table '{to_table}' does not exist in schema."
+                )
+            if to_column not in {c.name for c in target_tbl.columns}:
+                raise ValueError(
+                    f"FK target column '{to_table}.{to_column}' does not exist in schema."
+                )
+            relation = Relation(
+                name=f"{table}_{name}_fkey",
+                from_table=table,
+                from_column=name,
+                to_table=to_table,
+                to_column=to_column,
+                type="many-to-one",
+                on_delete="CASCADE",
+            )
+
+        # Both column and relation are valid — append atomically.
         tbl.columns.append(
             Column(
                 name=name,
@@ -504,24 +536,8 @@ def add_column(
                 foreign_key=foreign_key,
             )
         )
-        # Auto-create a Relation for FK columns so SQL export, migration SQL,
-        # and the canvas all reflect the foreign key relationship.
-        if foreign_key:
-            parts = foreign_key.rsplit(".", 1)
-            if len(parts) == 2:
-                to_table_raw, to_column = parts
-                to_table = to_table_raw.rsplit(".", 1)[-1]  # strip optional schema prefix
-                s.relations.append(
-                    Relation(
-                        name=f"{table}_{name}_fkey",
-                        from_table=table,
-                        from_column=name,
-                        to_table=to_table,
-                        to_column=to_column,
-                        type="many-to-one",
-                        on_delete="CASCADE",
-                    )
-                )
+        if relation is not None:
+            s.relations.append(relation)
         return s
 
     try:

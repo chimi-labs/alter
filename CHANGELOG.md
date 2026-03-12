@@ -6,6 +6,23 @@ All notable changes to Alter are documented here.
 
 ### Fixed
 
+#### `add_column` MCP tool creates dangling Relation for nonexistent FK targets
+
+- `add_column` in `mcp_server.py` appended the column first and then created a
+  `Relation` object referencing whatever `foreign_key` string was supplied,
+  without checking that the target table or column actually exists.  A call like
+  `add_column(table="users", name="org_id", foreign_key="ghost.id")` would leave
+  a broken `Relation` in the schema that `alter validate` flags as an error and
+  SQL export turns into an invalid `REFERENCES` clause.
+- Added validation of `to_table` and `to_column` existence **before** the
+  column or relation is appended, so a failed FK check leaves the schema
+  completely unchanged (no partial column, no dangling relation).
+- Also strips invalid `foreign_key` values silently in the canvas
+  `add_column` handler (`canvas/server.py`) for defence-in-depth.
+- Added 5 tests: nonexistent table → error, nonexistent column → error,
+  malformed format → error, no partial column left on failure, valid FK → both
+  column and relation created.
+
 #### Canvas `modify_column` accepts arbitrary fields without validation
 
 - `_handle_propose` in `canvas/server.py` applied any key sent in the

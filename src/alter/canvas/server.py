@@ -612,6 +612,24 @@ class _Handler(BaseHTTPRequestHandler):
                     col_data = payload["column"]
                     tbl = next((t for t in s.tables if t.name == tname), None)
                     if tbl:
+                        # Validate FK target if provided so we never persist a
+                        # column whose foreign_key points at a non-existent table
+                        # or column.
+                        fk = col_data.get("foreign_key")
+                        if fk:
+                            fk_parts = fk.rsplit(".", 1)
+                            if len(fk_parts) == 2:
+                                fk_to_table, fk_to_col = fk_parts
+                                fk_to_table = fk_to_table.rsplit(".", 1)[-1]
+                                fk_tbl = next(
+                                    (t for t in s.tables if t.name == fk_to_table), None
+                                )
+                                if fk_tbl is None or fk_to_col not in {
+                                    c.name for c in fk_tbl.columns
+                                }:
+                                    # Silently strip the invalid FK rather than
+                                    # raising (canvas ops are best-effort).
+                                    col_data = {**col_data, "foreign_key": None}
                         col = Column(**col_data)
                         tbl.columns.append(col)
 

@@ -161,6 +161,56 @@ def test_add_column_duplicate_returns_error() -> None:
     assert msg.startswith("Error:")
 
 
+def test_add_column_fk_nonexistent_table_returns_error() -> None:
+    add_table("users")
+    msg = add_column("users", "org_id", "uuid", foreign_key="nonexistent_table.id")
+    assert msg.startswith("Error:")
+    assert "nonexistent_table" in msg
+
+
+def test_add_column_fk_nonexistent_column_returns_error() -> None:
+    add_table("users")
+    add_table("orgs")
+    # orgs has only the seeded 'id' column — 'name' does not exist
+    msg = add_column("users", "org_id", "uuid", foreign_key="orgs.name")
+    assert msg.startswith("Error:")
+    assert "orgs.name" in msg
+
+
+def test_add_column_fk_nonexistent_target_leaves_no_partial_column() -> None:
+    """A failed FK validation must not leave the column in the schema."""
+    add_table("users")
+    add_column("users", "org_id", "uuid", foreign_key="ghost.id")
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "users")
+    col_names = [c["name"] for c in tbl["columns"]]
+    assert "org_id" not in col_names
+
+
+def test_add_column_fk_valid_creates_column_and_relation() -> None:
+    add_table("users")
+    add_table("orgs")
+    # orgs has a seeded uuid 'id' column
+    msg = add_column("users", "org_id", "uuid", foreign_key="orgs.id")
+    assert "Error" not in msg
+    proposed = read_proposed()
+    # Column exists
+    tbl = next(t for t in proposed["tables"] if t["name"] == "users")
+    col_names = [c["name"] for c in tbl["columns"]]
+    assert "org_id" in col_names
+    # Relation exists (serialised as "from": "table.col", "to": "table.col")
+    assert any(
+        r.get("from") == "users.org_id" and r.get("to") == "orgs.id"
+        for r in proposed["relations"]
+    )
+
+
+def test_add_column_fk_invalid_format_returns_error() -> None:
+    add_table("users")
+    msg = add_column("users", "x", "uuid", foreign_key="no_dot_here")
+    assert msg.startswith("Error:")
+
+
 # ---------------------------------------------------------------------------
 # modify_column
 # ---------------------------------------------------------------------------
