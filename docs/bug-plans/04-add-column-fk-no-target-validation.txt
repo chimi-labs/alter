@@ -1,0 +1,79 @@
+BUG: `add_column` MCP tool creates dangling Relation for nonexistent FK targets
+SEVERITY: Medium
+STATUS: Open
+
+REPRODUCTION:
+  # Via MCP tool:
+  add_column(table="users", name="org_id", type="uuid",
+             foreign_key="nonexistent_table.id")
+  # Creates a Relation with to_table="nonexistent_table", to_column="id"
+  # Schema is now invalid — `alter validate` will flag this as an error.
+  # SQL export will generate a broken REFERENCES clause.
+
+EXPECTED:
+  The tool should return an error:
+    "Foreign key target 'nonexistent_table.id' does not exist in schema"
+  and NOT create the column or the relation.
+
+ROOT CAUSE:
+  mcp_server.py lines 509-524:
+    if foreign_key:
+        parts = foreign_key.rsplit(".", 1)
+        if len(parts) == 2:
+            to_table_raw, to_column = parts
+            to_table = to_table_raw.rsplit(".", 1)[-1]
+            s.relations.append(
+                Relation(
+                    name=f"{table}_{name}_fkey",
+                    from_table=table,
+                    from_column=name,
+                    to_table=to_table,
+                    to_column=to_column,
+                    type="many-to-one",
+                    on_delete="CASCADE",
+                )
+            )
+
+  No check that `to_table` exists in `s.tables` or that `to_column` exists
+  in that table's columns.
+
+FIX PLAN:
+  1. After parsing `to_table` and `to_column`, validate existence:
+       target_tbl = next((t for t in s.tables if t.name == to_table), None)
+       if target_tbl is None:
+           return f"Error: FK target table '{to_table}' does not exist."
+       if to_column not in {c.name for c in target_tbl.columns}:
+           return f"Error: FK target column '{to_table}.{to_column}' does not exist."
+  2. Return the error BEFORE appending either the column or the relation.
+     Currently the column is appended on line 506 before the FK check —
+     this means a failed FK validation would leave the column added but
+     without a relation. Move the column append to AFTER the FK validation,
+     or wrap both in a transaction-like pattern.
+
+  Restructured flow:
+    col = Column(name=name, type=type, ...)
+    relation = None
+    if foreign_key:
+        ... parse and validate ...
+        if not valid:
+            return error
+        relation = Relation(...)
+    tbl.columns.append(col)
+    if relation:
+        s.relations.append(relation)
+
+  3. Apply the same validation in the canvas server's add_column handler
+     (canvas/server.py line 547) if it also accepts foreign_key. Currently
+     it takes raw Column(**col_data) with no FK processing, so it's less
+     affected — but for consistency, it should validate too.
+
+VERIFICATION:
+  - add_column with foreign_key="nonexistent.id" → error message returned.
+  - add_column with foreign_key="users.id" (valid) → column + relation created.
+  - add_column with foreign_key="users.nonexistent_col" → error message.
+
+TESTS:
+  - Test add_column with nonexistent FK table returns error.
+  - Test add_column with nonexistent FK column returns error.
+  - Test add_column with valid FK creates both column and relation.
+  - Test that failed FK validation does NOT leave a partial column behind.

@@ -1,0 +1,72 @@
+BUG: SQL importer silently downgrades unknown types to "string"
+SEVERITY: High
+STATUS: Open
+
+REPRODUCTION:
+  $ cat > geo.sql <<'EOF'
+  CREATE TABLE locations (
+      id UUID PRIMARY KEY,
+      area GEOMETRY NOT NULL,
+      duration INTERVAL,
+      range TSRANGE
+  );
+  EOF
+  $ alter import geo.sql
+  # Imports 1 table — area, duration, range are ALL stored as type "string"
+  # No warning printed anywhere.
+
+EXPECTED:
+  The import should either:
+  (a) Warn about each unrecognised type so the user knows to fix them, OR
+  (b) Store the raw SQL type name for round-trip fidelity.
+
+  Option (a) is the minimal fix. The user can then manually correct types
+  in the canvas or .alter file.
+
+ROOT CAUSE:
+  importers/sql.py lines 306-310:
+    try:
+        alter_type = sql_to_alter(raw_type.upper())
+    except KeyError:
+        alter_type = "string"
+
+  There is no logging, no warning, and no way for the caller to know that
+  types were downgraded.
+
+FIX PLAN:
+  1. Add a `warnings` list to `import_sql()` (similar to how the parser's
+     `_FileResult` carries warnings).
+  2. On KeyError, append a warning string:
+       warnings.append(
+           f"Unknown SQL type '{raw_type}' for column '{col_name}' "
+           f"in table '{table_name}' — defaulting to 'string'"
+       )
+  3. Return the warnings alongside the schema. Two options:
+     (a) Wrap the return in a dataclass: `ImportResult(schema, warnings)`
+     (b) Add warnings to AlterSchema directly (less clean).
+     Option (a) is better. Create:
+       @dataclass
+       class ImportResult:
+           schema: AlterSchema
+           warnings: list[str]
+  4. In cli.py `import_cmd`, print each warning to stderr.
+  5. In mcp_server.py `import_schema`, append warnings to the return string.
+
+  NOTE: This changes the return type of `import_sql()` from `AlterSchema`
+  to `ImportResult`. All callers must be updated:
+  - cli.py import_cmd (line 596)
+  - mcp_server.py import_schema (line 924)
+  - Any tests that call import_sql directly.
+
+VERIFICATION:
+  $ alter import geo.sql
+  # Should print:
+  #   ⚠  Unknown SQL type 'GEOMETRY' for locations.area — defaulting to 'string'
+  #   ⚠  Unknown SQL type 'INTERVAL' for locations.duration — defaulting to 'string'
+  #   ⚠  Unknown SQL type 'TSRANGE' for locations.range — defaulting to 'string'
+  #   Imported 1 new tables from geo.sql → schema.alter
+
+TESTS:
+  - Test import_sql with unknown types returns warnings list.
+  - Test CLI output includes warning lines on stderr.
+  - Test that valid SQL types produce no warnings.

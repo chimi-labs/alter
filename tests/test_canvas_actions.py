@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from alter.mcp_server import _apply_to_code_impl, _sync_from_code_impl
-from alter.schema import AlterSchema, Column, Position, Table
+from alter.canvas.server import _apply_modify_column, _MODIFIABLE_COL_FIELDS
+from alter.schema import AlterSchema, Column, EnumDef, Position, Relation, Table
 from alter.staging import StagingManager
 
 
@@ -398,3 +399,149 @@ def test_sync_deduplicates_enums_across_files(tmp_path: Path) -> None:
         f"Expected Status to appear once, got {enum_names}"
     )
 
+
+# ---------------------------------------------------------------------------
+# _apply_modify_column — whitelist / validation tests
+# ---------------------------------------------------------------------------
+
+
+def _make_simple_schema() -> AlterSchema:
+    """Two tables (users, orders) with a FK relation for rename tests."""
+    users = Table(
+        name="users",
+        columns=[
+            Column(name="id", type="uuid", primary_key=True, nullable=False),
+            Column(name="email", type="string", nullable=False, unique=True),
+            Column(name="bio", type="text", nullable=True),
+        ],
+    )
+    orders = Table(
+        name="orders",
+        columns=[
+            Column(name="id", type="uuid", primary_key=True, nullable=False),
+            Column(name="user_id", type="uuid", foreign_key="users.id"),
+        ],
+    )
+    rel = Relation(
+        name="orders_user_id_fk",
+        from_table="orders",
+        from_column="user_id",
+        to_table="users",
+        to_column="id",
+    )
+    return AlterSchema(orm="sqlmodel", tables=[users, orders], relations=[rel])
+
+
+class TestApplyModifyColumnWhitelist:
+    """Only whitelisted fields should be mutated."""
+
+    def test_whitelisted_field_nullable_is_applied(self) -> None:
+        s = _make_simple_schema()
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "bio")
+        assert col.nullable is True
+        _apply_modify_column(s, "users", "bio", {"nullable": False})
+        assert col.nullable is False
+
+    def test_whitelisted_field_unique_is_applied(self) -> None:
+        s = _make_simple_schema()
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "bio")
+        _apply_modify_column(s, "users", "bio", {"unique": True})
+        assert col.unique is True
+
+    def test_non_whitelisted_field_is_silently_ignored(self) -> None:
+        s = _make_simple_schema()
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "email")
+        # 'primary_key' is not in _MODIFIABLE_COL_FIELDS
+        original_pk = col.primary_key
+        _apply_modify_column(s, "users", "email", {"primary_key": True})
+        assert col.primary_key == original_pk
+
+    def test_unknown_field_is_silently_ignored(self) -> None:
+        s = _make_simple_schema()
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "email")
+        # Arbitrary payload key should not raise and should not set attr
+        _apply_modify_column(s, "users", "email", {"__class__": "hacked"})
+        assert col.__class__ is Column
+
+    def test_whitelist_constant_contents(self) -> None:
+        expected = {"name", "type", "nullable", "unique", "default", "max_length", "index", "foreign_key"}
+        assert _MODIFIABLE_COL_FIELDS == expected
+
+
+class TestApplyModifyColumnTypeValidation:
+    """type updates must be a known built-in or declared enum."""
+
+    def test_valid_builtin_type_is_applied(self) -> None:
+        s = _make_simple_schema()
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "bio")
+        _apply_modify_column(s, "users", "bio", {"type": "int"})
+        assert col.type == "int"
+
+    def test_invalid_type_is_rejected(self) -> None:
+        s = _make_simple_schema()
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "bio")
+        original_type = col.type
+        _apply_modify_column(s, "users", "bio", {"type": "NOT_A_REAL_TYPE"})
+        assert col.type == original_type
+
+    def test_declared_enum_type_is_accepted(self) -> None:
+        s = _make_simple_schema()
+        s.enums.append(EnumDef(name="Status", values=["active", "inactive"]))
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "bio")
+        _apply_modify_column(s, "users", "bio", {"type": "Status"})
+        assert col.type == "Status"
+
+    def test_undeclared_enum_name_is_rejected(self) -> None:
+        s = _make_simple_schema()
+        col = next(c for t in s.tables if t.name == "users" for c in t.columns if c.name == "bio")
+        original_type = col.type
+        # "Status" is not in s.enums, so it must be rejected
+        _apply_modify_column(s, "users", "bio", {"type": "Status"})
+        assert col.type == original_type
+
+
+class TestApplyModifyColumnRename:
+    """name updates should cascade to relations and FK refs."""
+
+    def test_rename_updates_column_name(self) -> None:
+        s = _make_simple_schema()
+        _apply_modify_column(s, "users", "email", {"name": "email_address"})
+        names = [c.name for t in s.tables if t.name == "users" for c in t.columns]
+        assert "email_address" in names
+        assert "email" not in names
+
+    def test_rename_updates_relation_from_column(self) -> None:
+        s = _make_simple_schema()
+        _apply_modify_column(s, "orders", "user_id", {"name": "owner_id"})
+        rel = s.relations[0]
+        assert rel.from_column == "owner_id"
+
+    def test_rename_updates_foreign_key_refs(self) -> None:
+        s = _make_simple_schema()
+        # Rename the target column users.id → users.uid
+        _apply_modify_column(s, "users", "id", {"name": "uid"})
+        fk_col = next(c for t in s.tables if t.name == "orders" for c in t.columns if c.name == "user_id")
+        assert fk_col.foreign_key == "users.uid"
+
+    def test_rename_to_duplicate_is_rejected(self) -> None:
+        s = _make_simple_schema()
+        # "email" already exists in users; renaming "bio" → "email" should be a no-op
+        _apply_modify_column(s, "users", "bio", {"name": "email"})
+        names = [c.name for t in s.tables if t.name == "users" for c in t.columns]
+        assert names.count("email") == 1
+        assert "bio" in names
+
+    def test_rename_to_empty_string_is_rejected(self) -> None:
+        s = _make_simple_schema()
+        _apply_modify_column(s, "users", "bio", {"name": ""})
+        names = [c.name for t in s.tables if t.name == "users" for c in t.columns]
+        assert "bio" in names
+
+    def test_nonexistent_table_is_a_noop(self) -> None:
+        s = _make_simple_schema()
+        # Should not raise
+        _apply_modify_column(s, "ghost", "bio", {"nullable": False})
+
+    def test_nonexistent_column_is_a_noop(self) -> None:
+        s = _make_simple_schema()
+        _apply_modify_column(s, "users", "ghost_col", {"nullable": False})

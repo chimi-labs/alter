@@ -2,6 +2,29 @@
 
 All notable changes to Alter are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+#### Canvas `modify_column` accepts arbitrary fields without validation
+
+- `_handle_propose` in `canvas/server.py` applied any key sent in the
+  `modify_column` payload directly via `setattr` as long as `hasattr()` was
+  truthy.  This allowed clients to mutate internal fields (e.g. `primary_key`,
+  `id`) and to set arbitrary column types including invalid strings.
+- Introduced `_MODIFIABLE_COL_FIELDS` whitelist (`name`, `type`, `nullable`,
+  `unique`, `default`, `max_length`, `index`, `foreign_key`) — only updates
+  matching a whitelisted key are applied.
+- `type` values are validated against `TYPE_MAP` and the schema's declared
+  enums; unknown types are silently rejected.
+- `name` updates are handled as a proper rename: duplicate/empty names are
+  rejected, relation objects and `Column.foreign_key` strings are updated to
+  reflect the new name (mirroring `rename_entity` in `mcp_server.py`).
+- Extracted the logic into a module-level `_apply_modify_column()` helper so
+  the behavior can be unit-tested without spinning up an HTTP server.
+- Added 16 tests covering the whitelist, type validation, rename cascading, and
+  edge cases.
+
 ## [0.1.8] — 2026-03-12
 
 ### Fixed

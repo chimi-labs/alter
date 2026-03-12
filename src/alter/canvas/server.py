@@ -43,9 +43,77 @@ from alter.importers.sql import import_sql
 
 from alter.schema import AlterSchema, Column, EnumDef, Relation, Table
 from alter.staging import StagingManager
+from alter.types import TYPE_MAP
 
 _STATIC = Path(__file__).parent / "static"
 _TEMPLATES = Path(__file__).parent.parent / "templates"
+
+# Fields on Column that canvas clients are permitted to update via modify_column.
+# Private fields (e.g. id), computed fields, and positional metadata are excluded.
+_MODIFIABLE_COL_FIELDS: frozenset[str] = frozenset({
+    "name",
+    "type",
+    "nullable",
+    "unique",
+    "default",
+    "max_length",
+    "index",
+    "foreign_key",
+})
+
+def _apply_modify_column(
+    s: AlterSchema,
+    tname: str,
+    cname: str,
+    updates: dict[str, Any],
+) -> None:
+    """Apply *updates* to a column in *s*, enforcing the field whitelist.
+
+    Mutates *s* in-place.  Called both from ``_handle_propose`` and from tests.
+    """
+    tbl = next((t for t in s.tables if t.name == tname), None)
+    if not tbl:
+        return
+    col = next((c for c in tbl.columns if c.name == cname), None)
+    if not col:
+        return
+
+    for k, v in updates.items():
+        # Only allow whitelisted fields.
+        if k not in _MODIFIABLE_COL_FIELDS:
+            continue
+
+        if k == "type":
+            # Validate: must be a known built-in type or a declared enum name.
+            valid = v in TYPE_MAP or any(e.name == v for e in s.enums)
+            if not valid:
+                continue
+
+        if k == "name":
+            new_col_name = v
+            if not new_col_name or any(
+                c.name == new_col_name for c in tbl.columns if c is not col
+            ):
+                continue  # empty or duplicate name — skip
+            old_col_name = col.name
+            # Update relation objects
+            for rel in s.relations:
+                if rel.from_table == tname and rel.from_column == old_col_name:
+                    rel.from_column = new_col_name
+                if rel.to_table == tname and rel.to_column == old_col_name:
+                    rel.to_column = new_col_name
+            # Update Column.foreign_key strings
+            old_fk = f"{tname}.{old_col_name}"
+            new_fk = f"{tname}.{new_col_name}"
+            for t in s.tables:
+                for c in t.columns:
+                    if c.foreign_key == old_fk:
+                        c.foreign_key = new_fk
+            col.name = new_col_name
+            continue
+
+        setattr(col, k, v)
+
 
 _GRID_COLS = 3
 _GRID_COL_W = 290
@@ -558,13 +626,7 @@ class _Handler(BaseHTTPRequestHandler):
                     tname = payload["table"]
                     cname = payload["column"]
                     updates = payload.get("updates", {})
-                    tbl = next((t for t in s.tables if t.name == tname), None)
-                    if tbl:
-                        col = next((c for c in tbl.columns if c.name == cname), None)
-                        if col:
-                            for k, v in updates.items():
-                                if hasattr(col, k):
-                                    setattr(col, k, v)
+                    _apply_modify_column(s, tname, cname, updates)
 
                 elif op == "add_relation":
                     rel_data = payload["relation"]
