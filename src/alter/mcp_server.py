@@ -173,57 +173,11 @@ def _schema_summary(schema: AlterSchema) -> dict[str, Any]:
 
 def _diff_markdown_text(staging: StagingManager) -> str:
     """Build a human-readable markdown changelog of pending changes."""
+    from alter.diff_format import changes_to_markdown  # noqa: PLC0415
+
     if not staging.has_pending():
         return "_No pending changes._"
-
-    changes = staging.get_diff()
-    if not changes:
-        return "_No pending changes._"
-
-    sections: dict[str, list[str]] = {
-        "Added Tables": [],
-        "Dropped Tables": [],
-        "Added Columns": [],
-        "Dropped Columns": [],
-        "Modified Columns": [],
-        "Added Relations": [],
-        "Dropped Relations": [],
-    }
-
-    for ch in changes:
-        if ch.type == "add_table":
-            sections["Added Tables"].append(f"- `{ch.table}`")
-        elif ch.type == "drop_table":
-            sections["Dropped Tables"].append(f"- ~~`{ch.table}`~~ ⚠️ destructive")
-        elif ch.type == "add_column":
-            sections["Added Columns"].append(f"- `{ch.table}.{ch.column}`")
-        elif ch.type == "drop_column":
-            sections["Dropped Columns"].append(f"- ~~`{ch.table}.{ch.column}`~~ ⚠️ destructive")
-        elif ch.type == "modify_column":
-            details = ", ".join(
-                f"{k}: `{v[0]}` → `{v[1]}`" for k, v in ch.details.items()
-            )
-            sections["Modified Columns"].append(
-                f"- `{ch.table}.{ch.column}` ({details})"
-                + (" ⚠️ destructive" if ch.destructive else "")
-            )
-        elif ch.type == "add_relation":
-            sections["Added Relations"].append(
-                f"- `{ch.table}.{ch.column}` → `{ch.details.get('to', '?')}`"
-            )
-        elif ch.type == "drop_relation":
-            sections["Dropped Relations"].append(
-                f"- ~~`{ch.table}.{ch.column}`~~ ⚠️ destructive"
-            )
-
-    lines = ["## Schema Changes\n"]
-    for heading, items in sections.items():
-        if items:
-            lines.append(f"### {heading}")
-            lines.extend(items)
-            lines.append("")
-
-    return "\n".join(lines)
+    return changes_to_markdown(staging.get_diff())
 
 
 def _apply_to_code_impl(

@@ -495,46 +495,9 @@ def _print_diff_text(changes: list, source_label: str) -> None:
 
 
 def _print_diff_markdown(changes: list) -> None:
-    from alter.mcp_server import _diff_markdown_text  # noqa: PLC0415
-    from alter.staging import StagingManager
-    import tempfile, json  # noqa: PLC0415
+    from alter.diff_format import changes_to_markdown  # noqa: PLC0415
 
-    # Build a staging manager that pretends current→proposed = the changes
-    # Actually, just format directly since we already have the changes list
-    sections: dict[str, list[str]] = {
-        "Added Tables": [], "Dropped Tables": [],
-        "Added Columns": [], "Dropped Columns": [],
-        "Modified Columns": [], "Added Relations": [], "Dropped Relations": [],
-    }
-    for ch in changes:
-        if ch.type == "add_table":
-            sections["Added Tables"].append(f"- `{ch.table}`")
-        elif ch.type == "drop_table":
-            sections["Dropped Tables"].append(f"- ~~`{ch.table}`~~ ⚠️ destructive")
-        elif ch.type == "add_column":
-            sections["Added Columns"].append(f"- `{ch.table}.{ch.column}`")
-        elif ch.type == "drop_column":
-            sections["Dropped Columns"].append(f"- ~~`{ch.table}.{ch.column}`~~ ⚠️ destructive")
-        elif ch.type == "modify_column":
-            details = ", ".join(f"{k}: `{v[0]}` → `{v[1]}`" for k, v in ch.details.items())
-            sections["Modified Columns"].append(
-                f"- `{ch.table}.{ch.column}` ({details})"
-                + (" ⚠️ destructive" if ch.destructive else "")
-            )
-        elif ch.type == "add_relation":
-            sections["Added Relations"].append(
-                f"- `{ch.table}.{ch.column}` → `{ch.details.get('to', '?')}`"
-            )
-        elif ch.type == "drop_relation":
-            sections["Dropped Relations"].append(f"- ~~`{ch.table}.{ch.column}`~~ ⚠️ destructive")
-
-    click.echo("## Schema Changes\n")
-    for heading, items in sections.items():
-        if items:
-            click.echo(f"### {heading}")
-            for item in items:
-                click.echo(item)
-            click.echo()
+    click.echo(changes_to_markdown(changes))
 
 
 # ---------------------------------------------------------------------------
