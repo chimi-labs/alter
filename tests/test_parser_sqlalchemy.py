@@ -440,13 +440,15 @@ def test_bug4_dict_literal_default_preserved() -> None:
 
 
 def test_bug5_datetime_now_preserved() -> None:
-    """Generator should emit datetime.now for 'now', not datetime.utcnow."""
+    """Generator emits datetime.now for 'now' and the modern timezone-aware
+    equivalent for 'utcnow' (datetime.utcnow is deprecated since Python 3.12)."""
     from alter.generators.sqlalchemy import _mapped_column_args
     from alter.schema import Column
     now_col = Column(name="created_at", type="datetime", default="now")
     utcnow_col = Column(name="synced_at", type="datetime", default="utcnow")
     assert "datetime.now" in _mapped_column_args(now_col, set())
-    assert "datetime.utcnow" in _mapped_column_args(utcnow_col, set())
+    assert "datetime.now(timezone.utc)" in _mapped_column_args(utcnow_col, set())
+    assert "datetime.utcnow" not in _mapped_column_args(utcnow_col, set())
 
 
 def test_bug6_enum_member_names_preserved() -> None:

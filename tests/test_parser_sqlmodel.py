@@ -950,13 +950,15 @@ def test_bug5_datetime_now_not_converted_to_utcnow() -> None:
 
 
 def test_bug5_generator_emits_correct_datetime() -> None:
-    """Generator should emit datetime.now for 'now' and datetime.utcnow for 'utcnow'."""
+    """Generator emits datetime.now for 'now' and the modern timezone-aware
+    equivalent for 'utcnow' (datetime.utcnow is deprecated since Python 3.12)."""
     from alter.generators.sqlmodel import _field_args
     now_col = Column(name="created_at", type="datetime", default="now")
     utcnow_col = Column(name="synced_at", type="datetime", default="utcnow")
     assert "datetime.now" in _field_args(now_col, set())
     assert "datetime.utcnow" not in _field_args(now_col, set())
-    assert "datetime.utcnow" in _field_args(utcnow_col, set())
+    assert "datetime.now(timezone.utc)" in _field_args(utcnow_col, set())
+    assert "datetime.utcnow" not in _field_args(utcnow_col, set())
 
 
 def test_bug6_enum_member_names_preserved() -> None:

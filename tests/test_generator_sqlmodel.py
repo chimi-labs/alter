@@ -152,7 +152,11 @@ def test_generate_default_factory_utcnow():
         ])],
     )
     code = gen().generate_models(schema)
-    assert "default_factory=datetime.utcnow" in code
+    # datetime.utcnow is deprecated since Python 3.12; generators emit the
+    # modern timezone-aware equivalent instead.
+    assert "default_factory=lambda: datetime.now(timezone.utc)" in code
+    assert "datetime.utcnow" not in code
+    assert "from datetime import datetime, timezone" in code
 
 
 def test_generate_unique_and_index():

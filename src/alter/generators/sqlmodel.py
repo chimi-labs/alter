@@ -77,7 +77,7 @@ def _field_args(col: Column, enum_names: set[str]) -> str:
     elif col.default == "uuid4":
         args.append("default_factory=uuid.uuid4")
     elif col.default == "utcnow":
-        args.append("default_factory=datetime.utcnow")
+        args.append("default_factory=lambda: datetime.now(timezone.utc)")
     elif col.default == "now":
         args.append("default_factory=datetime.now")
     elif col.default == "list":
@@ -202,6 +202,7 @@ def _build_imports(
 
     needs_uuid = False
     datetime_names: set[str] = set()
+    needs_timezone = False
     needs_optional = False
     needs_decimal = False
 
@@ -212,6 +213,9 @@ def _build_imports(
                 needs_uuid = True
             if py in ("datetime", "date", "time"):
                 datetime_names.add(py)
+            if col.default == "utcnow":
+                datetime_names.add("datetime")
+                needs_timezone = True
             if col.nullable and not col.primary_key:
                 needs_optional = True
             if py == "Decimal":
@@ -222,7 +226,10 @@ def _build_imports(
     if needs_uuid:
         lines.append("import uuid")
     if datetime_names:
-        lines.append(f"from datetime import {', '.join(sorted(datetime_names))}")
+        dt_imports = sorted(datetime_names)
+        if needs_timezone:
+            dt_imports = sorted(set(dt_imports) | {"timezone"})
+        lines.append(f"from datetime import {', '.join(dt_imports)}")
     if emit_enum_names:
         lines.append("from enum import Enum")
     if needs_decimal:
