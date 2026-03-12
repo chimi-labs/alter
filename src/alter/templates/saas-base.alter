@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "orm": "sqlmodel",
+  "dialect": "postgresql",
+  "tables": [
+    {
+      "name": "users",
+      "file_path": "app/models.py",
+      "position": {"x": 700, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "email", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 255, "foreign_key": null, "index": true},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 200, "foreign_key": null, "index": false},
+        {"name": "is_active", "type": "bool", "primary_key": false, "nullable": false, "default": "true", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "organizations",
+      "file_path": "app/models.py",
+      "position": {"x": 700, "y": 440},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 200, "foreign_key": null, "index": false},
+        {"name": "slug", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 100, "foreign_key": null, "index": true},
+        {"name": "settings", "type": "json", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "memberships",
+      "file_path": "app/models.py",
+      "position": {"x": 200, "y": 280},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "user_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "users.id", "index": false},
+        {"name": "organization_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "organizations.id", "index": false},
+        {"name": "role", "type": "Role", "primary_key": false, "nullable": false, "default": "member", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "joined_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "sessions",
+      "file_path": "app/models.py",
+      "position": {"x": 1200, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "user_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "users.id", "index": false},
+        {"name": "token", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 512, "foreign_key": null, "index": true},
+        {"name": "ip_address", "type": "string", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": 45, "foreign_key": null, "index": false},
+        {"name": "expires_at", "type": "datetime", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    }
+  ],
+  "relations": [
+    {"name": "memberships_user_id_fkey", "from_table": "memberships", "from_column": "user_id", "to_table": "users", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "memberships_organization_id_fkey", "from_table": "memberships", "from_column": "organization_id", "to_table": "organizations", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "sessions_user_id_fkey", "from_table": "sessions", "from_column": "user_id", "to_table": "users", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"}
+  ],
+  "enums": [
+    {"name": "Role", "values": ["admin", "member", "viewer"]}
+  ],
+  "metadata": {
+    "sqlmodel_module": "app/models.py",
+    "alembic_dir": "alembic",
+    "database_url_env": "DATABASE_URL",
+    "created_at": null,
+    "last_synced": null
+  }
+}

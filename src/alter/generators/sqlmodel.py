@@ -18,7 +18,7 @@ import keyword
 from alter.generators._surgical import surgical_update_class, surgical_update_enum_class
 from pathlib import Path
 
-from alter.generators.base import BaseGenerator
+from alter.generators.base import BaseGenerator, _default_model_path
 from alter.schema import AlterSchema, Column, EnumDef, Table
 from alter.types import alter_to_python, is_enum_type
 
@@ -201,7 +201,7 @@ def _build_imports(
         emit_enum_names = enum_names
 
     needs_uuid = False
-    needs_datetime = False
+    datetime_names: set[str] = set()
     needs_optional = False
     needs_decimal = False
 
@@ -211,7 +211,7 @@ def _build_imports(
             if "uuid" in py.lower():
                 needs_uuid = True
             if py in ("datetime", "date", "time"):
-                needs_datetime = True
+                datetime_names.add(py)
             if col.nullable and not col.primary_key:
                 needs_optional = True
             if py == "Decimal":
@@ -221,8 +221,8 @@ def _build_imports(
     # stdlib
     if needs_uuid:
         lines.append("import uuid")
-    if needs_datetime:
-        lines.append("from datetime import datetime")
+    if datetime_names:
+        lines.append(f"from datetime import {', '.join(sorted(datetime_names))}")
     if emit_enum_names:
         lines.append("from enum import Enum")
     if needs_decimal:
@@ -488,7 +488,7 @@ class SQLModelGenerator(BaseGenerator):
         # Group tables by file_path
         file_tables: dict[str, list[Table]] = {}
         for table in schema.tables:
-            fp = table.file_path or "app/models.py"
+            fp = table.file_path or _default_model_path(schema, project_root)
             file_tables.setdefault(fp, []).append(table)
 
         diffs: list[str] = []

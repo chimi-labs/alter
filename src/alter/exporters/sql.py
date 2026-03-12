@@ -127,8 +127,10 @@ def _format_default(default: str) -> str | None:
     if default in ("utcnow", "now"):
         return "now()"
     # list/dict factory defaults → empty JSONB literal
-    if default in ("list", "dict", "{}", "[]"):
+    if default in ("list", "[]"):
         return "'[]'::jsonb"
+    if default in ("dict", "{}"):
+        return "'{}'::jsonb"
     if default.upper() in ("TRUE", "FALSE"):
         return default.upper()
     # Numeric literal — emit as-is

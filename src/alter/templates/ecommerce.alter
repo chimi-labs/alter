@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "orm": "sqlmodel",
+  "dialect": "postgresql",
+  "tables": [
+    {
+      "name": "customers",
+      "file_path": "app/models.py",
+      "position": {"x": 80, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "email", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 255, "foreign_key": null, "index": true},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 200, "foreign_key": null, "index": false},
+        {"name": "phone", "type": "string", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": 30, "foreign_key": null, "index": false},
+        {"name": "shipping_address", "type": "json", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "categories",
+      "file_path": "app/models.py",
+      "position": {"x": 80, "y": 500},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 100, "foreign_key": null, "index": false},
+        {"name": "slug", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 100, "foreign_key": null, "index": true},
+        {"name": "parent_id", "type": "uuid", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": "categories.id", "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "products",
+      "file_path": "app/models.py",
+      "position": {"x": 600, "y": 400},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "name", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": 500, "foreign_key": null, "index": true},
+        {"name": "slug", "type": "string", "primary_key": false, "nullable": false, "default": null, "unique": true, "max_length": 500, "foreign_key": null, "index": true},
+        {"name": "description", "type": "text", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "price_cents", "type": "int", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "currency", "type": "string", "primary_key": false, "nullable": false, "default": "usd", "unique": false, "max_length": 3, "foreign_key": null, "index": false},
+        {"name": "sku", "type": "string", "primary_key": false, "nullable": true, "default": null, "unique": true, "max_length": 100, "foreign_key": null, "index": true},
+        {"name": "stock", "type": "int", "primary_key": false, "nullable": false, "default": "0", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "status", "type": "ProductStatus", "primary_key": false, "nullable": false, "default": "draft", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "category_id", "type": "uuid", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": "categories.id", "index": false},
+        {"name": "metadata", "type": "json", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "orders",
+      "file_path": "app/models.py",
+      "position": {"x": 600, "y": 80},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "customer_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "customers.id", "index": false},
+        {"name": "status", "type": "OrderStatus", "primary_key": false, "nullable": false, "default": "pending", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "total_cents", "type": "int", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "currency", "type": "string", "primary_key": false, "nullable": false, "default": "usd", "unique": false, "max_length": 3, "foreign_key": null, "index": false},
+        {"name": "shipping_address", "type": "json", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "notes", "type": "text", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "created_at", "type": "datetime", "primary_key": false, "nullable": false, "default": "utcnow", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "updated_at", "type": "datetime", "primary_key": false, "nullable": true, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    },
+    {
+      "name": "order_items",
+      "file_path": "app/models.py",
+      "position": {"x": 1100, "y": 240},
+      "columns": [
+        {"name": "id", "type": "uuid", "primary_key": true, "nullable": false, "default": "uuid4", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "order_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "orders.id", "index": false},
+        {"name": "product_id", "type": "uuid", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": "products.id", "index": false},
+        {"name": "quantity", "type": "int", "primary_key": false, "nullable": false, "default": "1", "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "unit_price_cents", "type": "int", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false},
+        {"name": "total_cents", "type": "int", "primary_key": false, "nullable": false, "default": null, "unique": false, "max_length": null, "foreign_key": null, "index": false}
+      ],
+      "indexes": []
+    }
+  ],
+  "relations": [
+    {"name": "orders_customer_id_fkey", "from_table": "orders", "from_column": "customer_id", "to_table": "customers", "to_column": "id", "type": "many-to-one", "on_delete": "RESTRICT"},
+    {"name": "order_items_order_id_fkey", "from_table": "order_items", "from_column": "order_id", "to_table": "orders", "to_column": "id", "type": "many-to-one", "on_delete": "CASCADE"},
+    {"name": "order_items_product_id_fkey", "from_table": "order_items", "from_column": "product_id", "to_table": "products", "to_column": "id", "type": "many-to-one", "on_delete": "RESTRICT"},
+    {"name": "products_category_id_fkey", "from_table": "products", "from_column": "category_id", "to_table": "categories", "to_column": "id", "type": "many-to-one", "on_delete": "SET NULL"},
+    {"name": "categories_parent_id_fkey", "from_table": "categories", "from_column": "parent_id", "to_table": "categories", "to_column": "id", "type": "many-to-one", "on_delete": "SET NULL"}
+  ],
+  "enums": [
+    {"name": "OrderStatus", "values": ["pending", "processing", "shipped", "delivered", "cancelled"]},
+    {"name": "ProductStatus", "values": ["active", "draft", "archived"]}
+  ],
+  "metadata": {
+    "sqlmodel_module": "app/models.py",
+    "alembic_dir": "alembic",
+    "database_url_env": "DATABASE_URL",
+    "created_at": null,
+    "last_synced": null
+  }
+}

@@ -98,28 +98,21 @@ def _find_model_dirs(cwd: Path) -> list[Path]:
 
 
 def _load_demo_schema() -> Path:
-    """Parse the SaaS starter example and write it to a temp .alter file."""
+    """Copy the bundled SaaS starter demo schema to a temp file and return its path."""
+    import shutil
     import tempfile
 
-    from alter.parsers.base import get_parser
-
-    examples_app = (
-        Path(__file__).parent.parent.parent / "examples" / "saas-starter" / "app"
-    )
-    if not examples_app.exists():
+    demo_src = Path(__file__).parent / "data" / "demo_schema.alter"
+    if not demo_src.exists():
         raise click.ClickException(
-            f"Demo models not found at {examples_app}. "
-            "Run from the Alter repo root."
+            "Demo schema not bundled with this installation. "
+            "Please reinstall alterdb or file a bug report."
         )
-
-    click.echo("  Parsing SaaS starter models…")
-    parser = get_parser("sqlmodel", project_root=examples_app.parent)
-    result = parser.parse_directory(examples_app)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".alter", delete=False, prefix="alter-demo-")
     tmp.close()
     path = Path(tmp.name)
-    result.schema.save(path)
+    shutil.copy2(demo_src, path)
     return path
 
 
@@ -374,7 +367,7 @@ def apply(alter_file: str | None, preview: bool) -> None:
 
     try:
         from alter.schema import AlterSchema
-        from alter.generators.base import get_generator
+        from alter.generators.base import get_generator, _default_model_path
         schema = AlterSchema.load(path)
         gen = get_generator(schema.orm)
     except AlterError as exc:
@@ -385,7 +378,7 @@ def apply(alter_file: str | None, preview: bool) -> None:
     # Group tables by file_path
     file_groups: dict[str, list] = {}
     for t in schema.tables:
-        fp = t.file_path or "app/models.py"
+        fp = t.file_path or _default_model_path(schema, project_root)
         file_groups.setdefault(fp, []).append(t)
 
     changed = 0

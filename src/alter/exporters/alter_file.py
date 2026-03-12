@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
+from alter.schema import AlterSchema
 
-def export_alter_file(schema: object, path: Path) -> None:
-    """Write AlterSchema as a .alter JSON file. Implemented in phase-1d."""
-    raise NotImplementedError("Implemented in phase-1d")
+
+def export_alter_file(schema: AlterSchema, path: Path) -> Path:
+    """Write *schema* as a .alter JSON file to *path* and return the path."""
+    schema.save(path)
+    return path

@@ -45,7 +45,7 @@ from alter.schema import AlterSchema, Column, Relation, Table
 from alter.staging import StagingManager
 
 _STATIC = Path(__file__).parent / "static"
-_TEMPLATES = Path(__file__).parent.parent.parent.parent / "templates"
+_TEMPLATES = Path(__file__).parent.parent / "templates"
 
 _GRID_COLS = 3
 _GRID_COL_W = 290
@@ -384,7 +384,7 @@ class _Handler(BaseHTTPRequestHandler):
                                 else:
                                     from alter.parsers.sqlalchemy import SQLAlchemyParser
                                     parsed = SQLAlchemyParser().parse_file(fpath)
-                                for t in parsed.tables:
+                                for t in parsed:
                                     if t.name not in schema_table_names:
                                         untracked.append(t.name)
                             except Exception:

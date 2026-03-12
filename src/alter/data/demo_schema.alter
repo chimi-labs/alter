@@ -1,0 +1,937 @@
+{
+  "version": 1,
+  "orm": "sqlmodel",
+  "dialect": "postgresql",
+  "tables": [
+    {
+      "name": "users",
+      "file_path": "app/models/starter.py",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid4",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": false,
+          "default": "expr:lambda : datetime.now(timezone.utc)",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "update_source",
+          "type": "UpdateSource",
+          "primary_key": false,
+          "nullable": false,
+          "default": "manual",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": 100,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "email",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": true,
+          "max_length": 255,
+          "foreign_key": null,
+          "index": true,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "is_active",
+          "type": "bool",
+          "primary_key": false,
+          "nullable": false,
+          "default": "true",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        }
+      ],
+      "indexes": [],
+      "bases": [
+        "UUIDBase",
+        "TimestampedBase",
+        "NameBase"
+      ],
+      "schema_name": null
+    },
+    {
+      "name": "organizations",
+      "file_path": "app/models/starter.py",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "columns": [
+        {
+          "name": "name",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": 100,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid4",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": true,
+          "max_length": 100,
+          "foreign_key": null,
+          "index": true,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "settings",
+          "type": "json",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": false,
+          "default": "utcnow",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        }
+      ],
+      "indexes": [],
+      "bases": [
+        "SQLModel",
+        "NameBase"
+      ],
+      "schema_name": null
+    },
+    {
+      "name": "memberships",
+      "file_path": "app/models/starter.py",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid4",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": "users.id",
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": "organizations.id",
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "role",
+          "type": "Role",
+          "primary_key": false,
+          "nullable": false,
+          "default": "member",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "joined_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": false,
+          "default": "utcnow",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        }
+      ],
+      "indexes": [],
+      "bases": [
+        "SQLModel"
+      ],
+      "schema_name": null
+    },
+    {
+      "name": "subscriptions",
+      "file_path": "app/models/starter.py",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid4",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": true,
+          "max_length": null,
+          "foreign_key": "organizations.id",
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "status",
+          "type": "SubscriptionStatus",
+          "primary_key": false,
+          "nullable": false,
+          "default": "trialing",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "plan",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": "free",
+          "unique": false,
+          "max_length": 50,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "trial_ends_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "current_period_end",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": false,
+          "default": "utcnow",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        }
+      ],
+      "indexes": [],
+      "bases": [
+        "SQLModel"
+      ],
+      "schema_name": null
+    },
+    {
+      "name": "invoices",
+      "file_path": "app/models/starter.py",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid4",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": "organizations.id",
+          "index": true,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": "subscriptions.id",
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "status",
+          "type": "InvoiceStatus",
+          "primary_key": false,
+          "nullable": false,
+          "default": "draft",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "amount_cents",
+          "type": "int",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "currency",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": "usd",
+          "unique": false,
+          "max_length": 3,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "due_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "paid_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "line_items",
+          "type": "json",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": false,
+          "default": "utcnow",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        }
+      ],
+      "indexes": [],
+      "bases": [
+        "SQLModel"
+      ],
+      "schema_name": null
+    },
+    {
+      "name": "posts",
+      "file_path": "app/models/starter.py",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid4",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": false,
+          "default": "expr:lambda : datetime.now(timezone.utc)",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "update_source",
+          "type": "UpdateSource",
+          "primary_key": false,
+          "nullable": false,
+          "default": "manual",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": true,
+          "extra_kwargs": null
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": 500,
+          "foreign_key": null,
+          "index": true,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "is_published",
+          "type": "bool",
+          "primary_key": false,
+          "nullable": false,
+          "default": "false",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "author_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": "users.id",
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": "organizations.id",
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        }
+      ],
+      "indexes": [],
+      "bases": [
+        "UUIDBase",
+        "TimestampedBase"
+      ],
+      "schema_name": null
+    },
+    {
+      "name": "audit_logs",
+      "file_path": "app/models/starter.py",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid4",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": "users.id",
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": 100,
+          "foreign_key": null,
+          "index": true,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "table_name",
+          "type": "string",
+          "primary_key": false,
+          "nullable": false,
+          "default": null,
+          "unique": false,
+          "max_length": 100,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "record_id",
+          "type": "uuid",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "primary_key": false,
+          "nullable": true,
+          "default": null,
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "primary_key": false,
+          "nullable": false,
+          "default": "utcnow",
+          "unique": false,
+          "max_length": null,
+          "foreign_key": null,
+          "index": false,
+          "inherited": false,
+          "extra_kwargs": null
+        }
+      ],
+      "indexes": [],
+      "bases": [
+        "SQLModel"
+      ],
+      "schema_name": null
+    }
+  ],
+  "relations": [
+    {
+      "name": "memberships_user_id_fkey",
+      "from_table": "memberships",
+      "from_column": "user_id",
+      "to_table": "users",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    },
+    {
+      "name": "memberships_organization_id_fkey",
+      "from_table": "memberships",
+      "from_column": "organization_id",
+      "to_table": "organizations",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    },
+    {
+      "name": "subscriptions_organization_id_fkey",
+      "from_table": "subscriptions",
+      "from_column": "organization_id",
+      "to_table": "organizations",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    },
+    {
+      "name": "invoices_organization_id_fkey",
+      "from_table": "invoices",
+      "from_column": "organization_id",
+      "to_table": "organizations",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    },
+    {
+      "name": "invoices_subscription_id_fkey",
+      "from_table": "invoices",
+      "from_column": "subscription_id",
+      "to_table": "subscriptions",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    },
+    {
+      "name": "posts_author_id_fkey",
+      "from_table": "posts",
+      "from_column": "author_id",
+      "to_table": "users",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    },
+    {
+      "name": "posts_organization_id_fkey",
+      "from_table": "posts",
+      "from_column": "organization_id",
+      "to_table": "organizations",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    },
+    {
+      "name": "audit_logs_user_id_fkey",
+      "from_table": "audit_logs",
+      "from_column": "user_id",
+      "to_table": "users",
+      "to_column": "id",
+      "type": "many-to-one",
+      "on_delete": "CASCADE"
+    }
+  ],
+  "enums": [
+    {
+      "name": "Role",
+      "values": [
+        {
+          "member_name": "admin",
+          "value": "admin"
+        },
+        {
+          "member_name": "member",
+          "value": "member"
+        },
+        {
+          "member_name": "viewer",
+          "value": "viewer"
+        }
+      ],
+      "file_path": "app/enums.py"
+    },
+    {
+      "name": "SubscriptionStatus",
+      "values": [
+        {
+          "member_name": "trialing",
+          "value": "trialing"
+        },
+        {
+          "member_name": "active",
+          "value": "active"
+        },
+        {
+          "member_name": "past_due",
+          "value": "past_due"
+        },
+        {
+          "member_name": "canceled",
+          "value": "canceled"
+        }
+      ],
+      "file_path": "app/enums.py"
+    },
+    {
+      "name": "InvoiceStatus",
+      "values": [
+        {
+          "member_name": "draft",
+          "value": "draft"
+        },
+        {
+          "member_name": "open",
+          "value": "open"
+        },
+        {
+          "member_name": "paid",
+          "value": "paid"
+        },
+        {
+          "member_name": "void",
+          "value": "void"
+        },
+        {
+          "member_name": "uncollectible",
+          "value": "uncollectible"
+        }
+      ],
+      "file_path": "app/enums.py"
+    },
+    {
+      "name": "UpdateSource",
+      "values": [
+        {
+          "member_name": "manual",
+          "value": "manual"
+        },
+        {
+          "member_name": "api",
+          "value": "api"
+        },
+        {
+          "member_name": "system",
+          "value": "system"
+        },
+        {
+          "member_name": "import_",
+          "value": "import"
+        }
+      ],
+      "file_path": "app/enums.py"
+    }
+  ],
+  "metadata": {
+    "sqlmodel_module": "app/models.py",
+    "alembic_dir": "alembic",
+    "database_url_env": "DATABASE_URL",
+    "created_at": null,
+    "last_synced": null
+  }
+}

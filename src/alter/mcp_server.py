@@ -230,7 +230,7 @@ def _apply_to_code_impl(
     staging: StagingManager, project_root: Path, preview: bool = False
 ) -> str:
     """Write (or diff) committed schema to ORM model files."""
-    from alter.generators.base import get_generator  # noqa: PLC0415
+    from alter.generators.base import get_generator, _default_model_path  # noqa: PLC0415
 
     schema = staging.current_schema
     gen = get_generator(schema.orm)
@@ -238,7 +238,7 @@ def _apply_to_code_impl(
     # Group tables by file_path
     file_groups: dict[str, list] = {}
     for t in schema.tables:
-        fp = t.file_path or "app/models.py"
+        fp = t.file_path or _default_model_path(schema, project_root)
         file_groups.setdefault(fp, []).append(t)
 
     diffs: list[str] = []
@@ -389,7 +389,7 @@ def read_proposed() -> dict[str, Any]:
 
 
 @mcp.tool()
-def add_table(name: str, file_path: str = "app/models.py") -> str:
+def add_table(name: str, file_path: str | None = None) -> str:
     """Add a new table to the proposed schema.
 
     A default ``id uuid PRIMARY KEY`` column is seeded automatically.
@@ -397,7 +397,10 @@ def add_table(name: str, file_path: str = "app/models.py") -> str:
 
     Args:
         name:      Table name (snake_case).
-        file_path: Relative path to the ORM model file (default app/models.py).
+        file_path: Relative path to the ORM model file.  When omitted the
+                   path is inferred from existing tables in the schema at
+                   apply time — new tables land in the same directory as
+                   the majority of existing tables.
     """
     staging = _get_staging()
 
@@ -405,7 +408,7 @@ def add_table(name: str, file_path: str = "app/models.py") -> str:
         s = copy.deepcopy(schema)
         if any(t.name == name for t in s.tables):
             raise ValueError(f"Table '{name}' already exists")
-        tbl = Table(name=name, file_path=file_path)
+        tbl = Table(name=name, **{"file_path": file_path} if file_path else {})
         tbl.columns.append(
             Column(name="id", type="uuid", primary_key=True, nullable=False, default="uuid4")
         )
@@ -1020,12 +1023,13 @@ def resource_proposed() -> str:
 @mcp.resource("alter://models")
 def resource_models() -> str:
     """The current ORM model source code from disk."""
+    from alter.generators.base import _default_model_path  # noqa: PLC0415
     staging = _get_staging()
     project_root = _get_path().parent
     parts: list[str] = []
     seen: set[str] = set()
     for tbl in staging.current_schema.tables:
-        fp = tbl.file_path or "app/models.py"
+        fp = tbl.file_path or _default_model_path(staging.current_schema, project_root)
         if fp not in seen:
             seen.add(fp)
             abs_path = project_root / fp

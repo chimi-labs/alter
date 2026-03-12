@@ -68,7 +68,7 @@ class Table(BaseModel):
     """A database table definition including canvas layout position."""
 
     name: str
-    file_path: str = "app/models.py"
+    file_path: Optional[str] = None
     position: Position = Field(default_factory=Position)
     columns: list[Column] = Field(default_factory=list)
     indexes: list[Index] = Field(default_factory=list)

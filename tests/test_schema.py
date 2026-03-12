@@ -158,7 +158,9 @@ def test_unknown_version_rejected() -> None:
         AlterSchema.model_validate(data)
 
 
-def test_file_path_defaults_to_app_models() -> None:
+def test_file_path_is_none_when_not_specified() -> None:
+    # file_path is intentionally None when absent — the right path is resolved
+    # at apply-time via generators._default_model_path(), not at parse time.
     data = {
         **MINIMAL_VALID_JSON,
         "tables": [
@@ -169,7 +171,7 @@ def test_file_path_defaults_to_app_models() -> None:
         ],
     }
     schema = AlterSchema.model_validate(data)
-    assert schema.tables[0].file_path == "app/models.py"
+    assert schema.tables[0].file_path is None
 
 
 def test_position_preserved_in_table() -> None:

@@ -167,7 +167,7 @@ def _diff_columns(
 
         mod_details = _column_diff(old_c, new_c)
         if mod_details:
-            destructive = "type" in mod_details  # type change may lose data
+            destructive = "type" in mod_details or "primary_key" in mod_details
             changes.append(
                 SchemaChange(
                     type="modify_column",
@@ -196,7 +196,7 @@ def _diff_columns(
 def _column_diff(old_c: Column, new_c: Column) -> dict:
     """Return {field: (old_val, new_val)} for every attribute that changed."""
     diff: dict = {}
-    for attr in ("type", "nullable", "default", "unique", "max_length", "foreign_key"):
+    for attr in ("type", "nullable", "default", "unique", "max_length", "foreign_key", "primary_key"):
         old_val = getattr(old_c, attr)
         new_val = getattr(new_c, attr)
         if old_val != new_val:

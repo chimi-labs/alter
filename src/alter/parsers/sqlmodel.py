@@ -893,25 +893,24 @@ def _parse_field_call(
                     )
 
     # ------------------------------------------------------------------
-    # sa_column / sa_type type override
+    # sa_column / sa_type type override (enum detection only)
     # ------------------------------------------------------------------
-    # When a field uses sa_column=Column(JSON) or sa_type=JSONB the Python
-    # annotation (e.g. str, dict) is misleading.  We inspect the stored
-    # expression string and promote the alter type to the correct value so
-    # that the canvas and SQL exports reflect the real database column type.
+    # The Python type annotation is the authoritative source for the column
+    # type — the generator reproduces it verbatim.  sa_column/sa_type handle
+    # the database-level mapping and are preserved in extra_kwargs.
+    #
+    # Exception: SQLEnum(MyEnum) / Enum(MyEnum) inside sa_column tells us
+    # which application-level enum class the column uses, which may not be
+    # visible from the annotation alone (e.g. annotation is plain ``str``).
+    # We do NOT infer the type from JSON/JSONB sa_column expressions —
+    # ``Optional[str]`` with ``sa_column=Column(JSON)`` must stay as
+    # ``"string"`` so that ``alter apply`` does not rewrite the annotation.
     sa_expr = extra_kwargs.get("sa_column") or extra_kwargs.get("sa_type", "")
     if sa_expr:
         import re as _re
-        sa_upper = sa_expr.upper()
-        if "JSON" in sa_upper and alter_type not in ("json", "json_array"):
-            # Column(JSON) / Column(JSONB) / JSON / JSONB
-            alter_type = "json"
-        else:
-            # SQLEnum(MyEnum, ...) or Enum(MyEnum, ...) — use the enum name
-            # if it matches a known enum class.
-            enum_match = _re.search(r'(?:SQLEnum|Enum)\((\w+)', sa_expr)
-            if enum_match and known_enums and enum_match.group(1) in known_enums:
-                alter_type = enum_match.group(1)
+        enum_match = _re.search(r'(?:SQLEnum|Enum)\((\w+)', sa_expr)
+        if enum_match and known_enums and enum_match.group(1) in known_enums:
+            alter_type = enum_match.group(1)
 
     col = Column(
         name=field_name,
@@ -1008,7 +1007,7 @@ def _make_relation(table_name: str, col: Column) -> Relation | None:
     if len(parts) != 2:
         return None
     to_table_raw, to_column = parts
-    # Strip leading schema qualifier ("alpha_ai.sessions" → "sessions")
+    # Strip leading schema qualifier ("myschema.users" → "users")
     to_table = to_table_raw.rsplit(".", 1)[-1]
     return Relation(
         name=f"{table_name}_{col.name}_fkey",

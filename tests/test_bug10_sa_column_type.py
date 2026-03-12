@@ -1,17 +1,19 @@
-"""Regression tests for Fix 10 — sa_column=Column(JSON) type override.
+"""Regression tests for Fix 10 / Fix 10b — sa_column type handling.
 
-ISSUE: A column annotated as ``Optional[str]`` with
-``sa_column=Column(JSON)`` was stored with alter type "string" instead
-of "json" because the parser resolved the type purely from the Python
-annotation and ignored the SA column expression.
+ORIGINAL FIX 10: ``_parse_field_call`` promoted the alter type to "json"
+when ``sa_column=Column(JSON)`` was present, even if the Python annotation
+was something else (e.g. ``Optional[str]``).
 
-Fix: ``_parse_field_call`` now inspects the stored ``sa_column`` /
-``sa_type`` expression string after all kwargs are collected and
-promotes the alter type to:
+FIX 10b (current): The Python type annotation is the authoritative source.
+``sa_column`` / ``sa_type`` are preserved in ``extra_kwargs`` and used at
+the database level, but they do NOT override the annotation-derived type.
+Exception: ``SQLEnum(MyEnum)`` inside ``sa_column`` still overrides the type
+when the annotation alone does not reveal which enum class is used.
 
-- ``"json"``  — when the expression contains ``JSON`` or ``JSONB``
-- the enum name — when the expression matches ``SQLEnum(EnumClass, ...)``
-  and that class is a known enum (bonus fix, same loop)
+Behaviour:
+- ``Optional[str]`` + ``sa_column=Column(JSON)``  → alter type "string"
+- ``Optional[dict]`` + ``sa_column=Column(JSON)`` → alter type "json" (from annotation)
+- ``Optional[str]`` + ``sa_column=Column(SQLEnum(Role))`` → alter type "Role"
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ def _parse(source: str):
 
 class TestSaColumnJsonOverride:
     def test_optional_str_with_sa_column_json(self):
-        """str annotation + sa_column=Column(JSON) → alter type "json"."""
+        """str annotation + sa_column=Column(JSON) → annotation wins → "string"."""
         source = """\
             from typing import Optional
             from sqlmodel import Field, SQLModel
@@ -60,10 +62,10 @@ class TestSaColumnJsonOverride:
         """
         result = _parse(source)
         col = next(c for c in result.tables[0].columns if c.name == "data")
-        assert col.type == "json", f"expected 'json', got {col.type!r}"
+        assert col.type == "string", f"expected 'string', got {col.type!r}"
 
     def test_optional_str_with_sa_column_jsonb(self):
-        """str annotation + sa_column=Column(JSONB) → alter type "json"."""
+        """str annotation + sa_column=Column(JSONB) → annotation wins → "string"."""
         source = """\
             from typing import Optional
             from sqlmodel import Field, SQLModel
@@ -76,10 +78,10 @@ class TestSaColumnJsonOverride:
         """
         result = _parse(source)
         col = next(c for c in result.tables[0].columns if c.name == "settings")
-        assert col.type == "json", f"expected 'json', got {col.type!r}"
+        assert col.type == "string", f"expected 'string', got {col.type!r}"
 
     def test_sa_column_json_not_nullable(self):
-        """Non-optional str + sa_column=Column(JSON) → "json", not nullable."""
+        """Non-optional str + sa_column=Column(JSON) → annotation wins → "string"."""
         source = """\
             from sqlmodel import Field, SQLModel
             from sqlalchemy import Column, JSON
@@ -91,7 +93,7 @@ class TestSaColumnJsonOverride:
         """
         result = _parse(source)
         col = next(c for c in result.tables[0].columns if c.name == "payload")
-        assert col.type == "json"
+        assert col.type == "string"
 
     def test_json_annotation_not_double_overridden(self):
         """dict annotation (→ json) + sa_column=Column(JSON) stays "json"."""
@@ -110,7 +112,7 @@ class TestSaColumnJsonOverride:
         assert col.type == "json"
 
     def test_sa_column_preserved_in_extra_kwargs(self):
-        """The sa_column expression is still stored in extra_kwargs for round-trip."""
+        """sa_column is stored in extra_kwargs; annotation type is preserved."""
         source = """\
             from typing import Optional
             from sqlmodel import Field, SQLModel
@@ -123,7 +125,7 @@ class TestSaColumnJsonOverride:
         """
         result = _parse(source)
         col = next(c for c in result.tables[0].columns if c.name == "blob")
-        assert col.type == "json"
+        assert col.type == "string"  # annotation wins
         assert col.extra_kwargs is not None
         assert "sa_column" in col.extra_kwargs
 
