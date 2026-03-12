@@ -504,6 +504,24 @@ def add_column(
                 foreign_key=foreign_key,
             )
         )
+        # Auto-create a Relation for FK columns so SQL export, migration SQL,
+        # and the canvas all reflect the foreign key relationship.
+        if foreign_key:
+            parts = foreign_key.rsplit(".", 1)
+            if len(parts) == 2:
+                to_table_raw, to_column = parts
+                to_table = to_table_raw.rsplit(".", 1)[-1]  # strip optional schema prefix
+                s.relations.append(
+                    Relation(
+                        name=f"{table}_{name}_fkey",
+                        from_table=table,
+                        from_column=name,
+                        to_table=to_table,
+                        to_column=to_column,
+                        type="many-to-one",
+                        on_delete="CASCADE",
+                    )
+                )
         return s
 
     try:
