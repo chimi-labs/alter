@@ -603,10 +603,17 @@ def import_cmd(source: str, alter_file: str | None, fmt: str | None) -> None:
                 s.enums.append(copy.deepcopy(enum))
         return s
 
+    existing_names = {t.name for t in staging.current_schema.tables}
+    new_count = sum(1 for t in imported.tables if t.name not in existing_names)
+    skipped_count = len(imported.tables) - new_count
+
     staging.propose(apply)
     staging.commit()
+
+    skip_note = f" ({skipped_count} skipped — already in schema)" if skipped_count else ""
     click.echo(
-        f"  Imported {len(imported.tables)} tables from {src_path.name} → {path.name}"
+        f"  Imported {new_count} new tables{skip_note}"
+        f" from {src_path.name} → {path.name}"
     )
 
 

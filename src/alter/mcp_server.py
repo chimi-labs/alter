@@ -940,8 +940,14 @@ def import_schema(source: str, format: str = "sql") -> str:
                 s.relations.append(copy.deepcopy(rel))
         return s
 
+    existing_names = {t.name for t in staging.current_schema.tables}
+    new_count = sum(1 for t in imported.tables if t.name not in existing_names)
+    skipped_count = len(imported.tables) - new_count
+
     staging.propose(apply)
-    return f"Imported {len(imported.tables)} tables from {format.upper()}."
+
+    skip_note = f" ({skipped_count} skipped — already in schema)" if skipped_count else ""
+    return f"Imported {new_count} new tables{skip_note} from {format.upper()}."
 
 
 @mcp.tool()
