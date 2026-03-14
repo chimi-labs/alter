@@ -2,6 +2,21 @@
 
 All notable changes to Alter are documented here.
 
+## [0.2.1] — 2026-03-14
+
+### Bug Fixes
+
+#### CSRF: canvas server replaced wildcard CORS with canvas-specific origin
+`Access-Control-Allow-Origin: *` allowed any website visited in the user's browser to make cross-origin requests to the canvas server's mutating endpoints (e.g. `/api/commit`, `/api/apply-to-code`). The server now reflects its own origin (`http://127.0.0.1:{port}`) in the ACAO header and adds `Vary: Origin`, so browser preflight checks block requests from other origins.
+
+#### Mermaid exporter: `FK,UK` now both emitted for FK+unique columns
+An `elif` on the unique check meant columns that are both a foreign key and unique (one-to-one relationship pattern) only showed `FK` in the diagram. Changed to `if` so both `FK` and `UK` attributes are emitted.
+
+#### SQL importer: parenthesized DEFAULT expressions with spaces now captured correctly
+`DEFAULT (1 + 2)` and `DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')` were truncated to just the first token because the `\S+` fallback stopped at the first space. Two-part fix: (1) `_DEFAULT_RE` now includes a parenthesized-expression branch `\((?:[^()]*|\([^()]*\))*\)` that handles one level of nesting; (2) the regex is now applied to the original `defn` string rather than the post-processed `rest`, because `_COL_DEF_RE`'s optional size group was silently stripping parentheses from DEFAULT expressions before `rest` was assembled.
+
+---
+
 ## [0.2.0] — 2026-03-14
 
 ### New Features

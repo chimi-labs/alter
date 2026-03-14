@@ -272,3 +272,144 @@ class TestParsePgDefault:
 
     def test_unrecognised_returns_none(self) -> None:
         assert _parse_pg_default("nextval('seq')") is None
+
+
+# ---------------------------------------------------------------------------
+# FK introspection — composite FK guard
+# ---------------------------------------------------------------------------
+
+
+class TestFkCompositeGuard:
+    """Verify correct FK handling and the composite-FK exclusion subquery."""
+
+    def test_single_column_fk_creates_one_relation(self) -> None:
+        """A single-column FK still produces exactly one Relation (no regression)."""
+        cursor = _make_cursor(
+            table_names=["posts", "users"],
+            col_rows=[
+                ("users", "id",      "uuid",    None, "NO",  None, "uuid"),
+                ("posts", "id",      "uuid",    None, "NO",  None, "uuid"),
+                ("posts", "user_id", "uuid",    None, "YES", None, "uuid"),
+            ],
+            pk_rows=[("users", "id"), ("posts", "id")],
+            fk_rows=[("posts", "user_id", "users", "id", "CASCADE")],
+        )
+        result = _introspect(_make_conn(cursor))
+        fk_rels = [r for r in result.relations if r.from_table == "posts"]
+        assert len(fk_rels) == 1
+        assert fk_rels[0].from_column == "user_id"
+        assert fk_rels[0].to_table == "users"
+        assert fk_rels[0].to_column == "id"
+
+    def test_multiple_single_column_fks_on_same_table(self) -> None:
+        """Multiple independent single-column FKs are all captured."""
+        cursor = _make_cursor(
+            table_names=["orders"],
+            col_rows=[
+                ("orders", "id",         "uuid", None, "NO",  None, "uuid"),
+                ("orders", "user_id",    "uuid", None, "YES", None, "uuid"),
+                ("orders", "product_id", "uuid", None, "YES", None, "uuid"),
+            ],
+            pk_rows=[("orders", "id")],
+            fk_rows=[
+                ("orders", "user_id",    "users",    "id", "CASCADE"),
+                ("orders", "product_id", "products", "id", "CASCADE"),
+            ],
+        )
+        result = _introspect(_make_conn(cursor))
+        fk_rels = {r.from_column: r for r in result.relations if r.from_table == "orders"}
+        assert "user_id" in fk_rels
+        assert "product_id" in fk_rels
+        assert fk_rels["user_id"].to_table == "users"
+        assert fk_rels["product_id"].to_table == "products"
+
+    def test_fk_sql_excludes_composite_constraints(self) -> None:
+        """The FK query must contain the subquery that filters out multi-column FKs."""
+        cursor = _make_cursor(table_names=["t"])
+        # We only care about the SQL sent, not the result
+        conn = _make_conn(cursor)
+        _introspect(conn)
+
+        # The 5th execute call is the FK query (0-indexed: tables, cols, pk, uq, fk)
+        all_calls = cursor.execute.call_args_list
+        assert len(all_calls) >= 5, "Expected at least 5 execute() calls"
+        fk_sql = all_calls[4][0][0]   # positional arg 0 of the 5th call
+
+        # Must contain the subquery that counts columns per constraint
+        assert "count(*)" in fk_sql.lower() or "count" in fk_sql.lower()
+        assert "= 1" in fk_sql
+
+    def test_self_referencing_single_column_fk(self) -> None:
+        """A self-referencing FK (same table, different column) is handled."""
+        cursor = _make_cursor(
+            table_names=["categories"],
+            col_rows=[
+                ("categories", "id",        "uuid", None, "NO",  None, "uuid"),
+                ("categories", "parent_id", "uuid", None, "YES", None, "uuid"),
+            ],
+            pk_rows=[("categories", "id")],
+            fk_rows=[("categories", "parent_id", "categories", "id", "SET NULL")],
+        )
+        result = _introspect(_make_conn(cursor))
+        self_refs = [r for r in result.relations if r.from_table == "categories"]
+        assert len(self_refs) == 1
+        assert self_refs[0].from_column == "parent_id"
+        assert self_refs[0].to_column == "id"
+        assert self_refs[0].on_delete == "SET NULL"
+
+
+# ---------------------------------------------------------------------------
+# ORM parameter threading
+# ---------------------------------------------------------------------------
+
+
+class TestOrmParameter:
+    """_introspect and import_from_database must stamp the caller-supplied ORM."""
+
+    def test_default_orm_is_sqlmodel(self) -> None:
+        cursor = _make_cursor(table_names=["users"])
+        result = _introspect(_make_conn(cursor))
+        assert result.orm == "sqlmodel"
+
+    def test_sqlalchemy_orm_is_preserved(self) -> None:
+        cursor = _make_cursor(table_names=["users"])
+        result = _introspect(_make_conn(cursor), orm="sqlalchemy")
+        assert result.orm == "sqlalchemy"
+
+    def test_sqlmodel_orm_explicit(self) -> None:
+        cursor = _make_cursor(table_names=["users"])
+        result = _introspect(_make_conn(cursor), orm="sqlmodel")
+        assert result.orm == "sqlmodel"
+
+    def test_mcp_introspect_db_passes_project_orm(self, tmp_path) -> None:
+        """introspect_db must use the current schema's ORM, not hardcode sqlmodel."""
+        import alter.mcp_server as ms
+        import alter.importers.database as db_mod
+        from alter.schema import AlterSchema
+        from unittest.mock import patch
+
+        # Project schema uses SQLAlchemy
+        alter_path = tmp_path / "schema.alter"
+        AlterSchema(orm="sqlalchemy").save(alter_path)
+        ms.init_mcp(alter_path)
+
+        captured: list[str] = []
+
+        def fake_import(cs: str, schema: str = "public", orm: str = "sqlmodel") -> AlterSchema:
+            captured.append(orm)
+            return AlterSchema(orm=orm)
+
+        original = db_mod.import_from_database
+        db_mod.import_from_database = fake_import  # type: ignore[assignment]
+        try:
+            from alter.mcp_server import introspect_db
+            introspect_db(connection_string="postgresql://fake/db")
+        except Exception:
+            pass  # connection errors are fine; we only care about the ORM arg
+        finally:
+            db_mod.import_from_database = original
+
+        assert captured, "import_from_database was never called"
+        assert captured[0] == "sqlalchemy", (
+            f"introspect_db passed orm='{captured[0]}' but project ORM is 'sqlalchemy'"
+        )

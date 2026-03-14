@@ -244,6 +244,80 @@ def test_relation_unknown_to_table_is_error():
     assert any("to_table" in i.message.lower() or "nonexistent" in i.message for i in errors)
 
 
+def test_relation_unknown_from_column_is_error():
+    """Relation.from_column not in from_table.columns → error."""
+    users = _valid_table("users")
+    orders = _valid_table("orders")
+    rel = Relation(
+        name="r",
+        from_table="orders",
+        from_column="ghost_col",     # does not exist in orders
+        to_table="users",
+        to_column="id",
+    )
+    schema = AlterSchema(tables=[users, orders], relations=[rel])
+    errors = _issues(schema, "error")
+    assert any("ghost_col" in i.message for i in errors), (
+        "Expected an error for dangling from_column 'ghost_col'"
+    )
+
+
+def test_relation_unknown_to_column_is_error():
+    """Relation.to_column not in to_table.columns → error."""
+    users = _valid_table("users")
+    orders = _valid_table("orders")
+    rel = Relation(
+        name="r",
+        from_table="orders",
+        from_column="id",
+        to_table="users",
+        to_column="ghost_col",       # does not exist in users
+    )
+    schema = AlterSchema(tables=[users, orders], relations=[rel])
+    errors = _issues(schema, "error")
+    assert any("ghost_col" in i.message for i in errors), (
+        "Expected an error for dangling to_column 'ghost_col'"
+    )
+
+
+def test_relation_valid_columns_no_error():
+    """A Relation whose columns all exist must produce no column-level errors."""
+    users = _valid_table("users")
+    orders = _valid_table("orders")
+    rel = Relation(
+        name="r",
+        from_table="orders",
+        from_column="id",
+        to_table="users",
+        to_column="id",
+    )
+    schema = AlterSchema(tables=[users, orders], relations=[rel])
+    col_errors = [
+        i for i in _issues(schema, "error")
+        if "column" in i.message.lower() and "relation" in i.message.lower()
+    ]
+    assert col_errors == [], f"Unexpected column errors for valid relation: {col_errors}"
+
+
+def test_relation_unknown_from_table_does_not_also_produce_column_error():
+    """When from_table is unknown, no spurious from_column error should appear."""
+    users = _valid_table("users")
+    rel = Relation(
+        name="r",
+        from_table="nonexistent",
+        from_column="some_col",
+        to_table="users",
+        to_column="id",
+    )
+    schema = AlterSchema(tables=[users], relations=[rel])
+    errors = _issues(schema, "error")
+    # Only one error: the missing from_table
+    from_table_errors = [e for e in errors if "from_table" in e.message.lower() or "nonexistent" in e.message]
+    col_errors = [e for e in errors if "some_col" in e.message]
+    assert from_table_errors, "Expected from_table error"
+    assert not col_errors, "Must not emit a column error when from_table is already unknown"
+
+
 # ---------------------------------------------------------------------------
 # Schema-qualified foreign keys  (fix: validator must accept 'schema.table.col')
 # ---------------------------------------------------------------------------

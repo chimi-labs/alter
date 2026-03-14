@@ -281,3 +281,94 @@ def test_effective_schema_returns_proposed_when_pending(preloaded_staging: Stagi
     preloaded_staging.propose(_add_table("orders"))
     eff = preloaded_staging.effective_schema()
     assert eff is preloaded_staging.proposed_schema
+
+
+# ---------------------------------------------------------------------------
+# propose() atomicity — failed change_fn must not corrupt stacks
+# ---------------------------------------------------------------------------
+
+
+def _raise_fn(schema: AlterSchema) -> AlterSchema:
+    """A change_fn that always raises."""
+    raise ValueError("intentional failure")
+
+
+class TestProposeAtomicity:
+
+    def test_undo_stack_unchanged_after_failed_propose(self, tmp_path: Path) -> None:
+        """A failing change_fn must not push a ghost entry onto the undo stack."""
+        staging = StagingManager(tmp_path / "s.alter")
+        staging.propose(_add_table("users"))
+        depth_before = len(staging._undo_stack)
+
+        with pytest.raises(ValueError):
+            staging.propose(_raise_fn)
+
+        assert len(staging._undo_stack) == depth_before
+
+    def test_proposed_schema_unchanged_after_failed_propose(self, tmp_path: Path) -> None:
+        """proposed_schema must be the same object after a failing change_fn."""
+        staging = StagingManager(tmp_path / "s.alter")
+        staging.propose(_add_table("users"))
+        schema_before = staging.proposed_schema
+
+        with pytest.raises(ValueError):
+            staging.propose(_raise_fn)
+
+        assert staging.proposed_schema is schema_before
+
+    def test_redo_stack_preserved_after_failed_propose(self, tmp_path: Path) -> None:
+        """A failing propose must NOT wipe redo history built up before it."""
+        staging = StagingManager(tmp_path / "s.alter")
+        staging.propose(_add_table("users"))
+        staging.propose(_add_table("orders"))
+        staging.undo()
+        redo_depth_before = len(staging._redo_stack)
+        assert redo_depth_before == 1  # sanity
+
+        with pytest.raises(ValueError):
+            staging.propose(_raise_fn)
+
+        assert len(staging._redo_stack) == redo_depth_before, (
+            "redo stack was wiped by a failing propose()"
+        )
+
+    def test_subsequent_valid_propose_succeeds_after_failed_one(self, tmp_path: Path) -> None:
+        """After a failed propose, the next valid propose must work normally."""
+        staging = StagingManager(tmp_path / "s.alter")
+
+        with pytest.raises(ValueError):
+            staging.propose(_raise_fn)
+
+        staging.propose(_add_table("users"))
+        assert staging.proposed_schema is not None
+        assert any(t.name == "users" for t in staging.proposed_schema.tables)
+
+    def test_undo_after_failed_propose_works_correctly(self, tmp_path: Path) -> None:
+        """Undo after a mixed success/failure sequence must restore the right state."""
+        staging = StagingManager(tmp_path / "s.alter")
+        staging.propose(_add_table("users"))
+
+        with pytest.raises(ValueError):
+            staging.propose(_raise_fn)
+
+        # Undo should restore to a schema WITHOUT 'users'
+        reverted = staging.undo()
+        table_names = {t.name for t in (reverted.tables if reverted else [])}
+        assert "users" not in table_names
+
+    def test_undo_stack_grows_only_on_successful_propose(self, tmp_path: Path) -> None:
+        """Each successful propose adds exactly one entry; failures add none."""
+        staging = StagingManager(tmp_path / "s.alter")
+
+        staging.propose(_add_table("users"))
+        assert len(staging._undo_stack) == 1
+
+        for _ in range(3):
+            with pytest.raises(ValueError):
+                staging.propose(_raise_fn)
+
+        assert len(staging._undo_stack) == 1  # still exactly one
+
+        staging.propose(_add_table("orders"))
+        assert len(staging._undo_stack) == 2

@@ -228,10 +228,26 @@ def validate_schema(schema: AlterSchema) -> list[ValidationIssue]:
                 severity="error", table=rel.from_table,
                 message=f"Relation references unknown from_table '{rel.from_table}'",
             ))
+        elif rel.from_column not in table_col_map.get(rel.from_table, set()):
+            issues.append(ValidationIssue(
+                severity="error", table=rel.from_table, column=rel.from_column,
+                message=(
+                    f"Relation references unknown column '{rel.from_column}' "
+                    f"in table '{rel.from_table}'"
+                ),
+            ))
         if rel.to_table not in table_names:
             issues.append(ValidationIssue(
                 severity="error", table=rel.from_table,
                 message=f"Relation references unknown to_table '{rel.to_table}'",
+            ))
+        elif rel.to_column not in table_col_map.get(rel.to_table, set()):
+            issues.append(ValidationIssue(
+                severity="error", table=rel.to_table, column=rel.to_column,
+                message=(
+                    f"Relation references unknown column '{rel.to_column}' "
+                    f"in table '{rel.to_table}'"
+                ),
             ))
 
     return issues

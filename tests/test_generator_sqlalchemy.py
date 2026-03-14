@@ -480,3 +480,57 @@ def test_sqla_update_kwarg_order_preserved_for_unchanged_field():
     result = gen().update_models(schema, EXISTING_WITH_RELATIONSHIPS_SQLA)
     # id field: hand-written kwarg order preserved (nullable, default, primary_key — not canonical order)
     assert "mapped_column(Uuid, nullable=False, default=uuid.uuid4, primary_key=True)" in result
+
+
+# ---------------------------------------------------------------------------
+# default="dict" / default="list" handling (SQLAlchemy uses default=, not default_factory=)
+# ---------------------------------------------------------------------------
+
+
+def _sqla_col(default: str) -> Column:
+    return Column(name="data", type="json", nullable=True, default=default)
+
+
+def test_sqla_default_dict_string_produces_default_dict():
+    """default='dict' must emit default=dict, not default='dict'."""
+    from alter.generators.sqlalchemy import _mapped_column_args
+    result = _mapped_column_args(_sqla_col("dict"), set())
+    assert "default=dict" in result
+    assert 'default="dict"' not in result
+
+
+def test_sqla_default_curly_braces_produces_default_dict():
+    """default='{}' must still emit default=dict (no regression)."""
+    from alter.generators.sqlalchemy import _mapped_column_args
+    result = _mapped_column_args(_sqla_col("{}"), set())
+    assert "default=dict" in result
+
+
+def test_sqla_default_list_string_produces_default_list():
+    """default='list' must emit default=list, not default='list'."""
+    from alter.generators.sqlalchemy import _mapped_column_args
+    result = _mapped_column_args(_sqla_col("list"), set())
+    assert "default=list" in result
+    assert 'default="list"' not in result
+
+
+def test_sqla_default_square_brackets_produces_default_list():
+    """default='[]' must still emit default=list (no regression)."""
+    from alter.generators.sqlalchemy import _mapped_column_args
+    result = _mapped_column_args(_sqla_col("[]"), set())
+    assert "default=list" in result
+
+
+def test_sqla_generate_models_default_dict():
+    """Full SQLAlchemy code generation for a json column with default='dict'."""
+    from alter.generators.sqlalchemy import SQLAlchemyGenerator
+    schema = AlterSchema(
+        orm="sqlalchemy",
+        tables=[Table(name="event", columns=[
+            Column(name="id", type="uuid", primary_key=True, nullable=False, default="uuid4"),
+            Column(name="payload", type="json", nullable=True, default="dict"),
+        ])],
+    )
+    code = SQLAlchemyGenerator().generate_models(schema)
+    assert "default=dict" in code
+    assert 'default="dict"' not in code

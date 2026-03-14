@@ -278,3 +278,106 @@ def test_run_merge_driver_invalid_json_returns_1(tmp_path: Path) -> None:
 
     code = run_merge_driver(str(base_path), str(ours_path), str(theirs_path))
     assert code == 1
+
+
+# ---------------------------------------------------------------------------
+# modify-vs-delete conflict detection
+# ---------------------------------------------------------------------------
+
+
+class TestModifyVsDeleteConflict:
+    """Modify on one side + delete on the other must record a conflict."""
+
+    def test_ours_modified_theirs_deleted_is_conflict(self) -> None:
+        """Ours modifies table X; theirs deletes table X → conflict, ours kept."""
+        base = _schema_with_tables([_table("users"), _table("orders")])
+        # Ours adds a column to orders
+        ours = _schema_with_tables([
+            _table("users"),
+            _table("orders", extra_cols=[_col("note", "string")]),
+        ])
+        # Theirs deletes orders entirely
+        theirs = _schema_with_tables([_table("users")])
+
+        result = merge_schemas(base, ours, theirs)
+
+        assert result.has_conflicts
+        assert any("orders" in msg for msg in result.conflicts)
+        # Modified version must be preserved
+        assert any(t.name == "orders" for t in result.schema.tables)
+        orders = next(t for t in result.schema.tables if t.name == "orders")
+        assert any(c.name == "note" for c in orders.columns)
+
+    def test_ours_deleted_theirs_modified_is_conflict(self) -> None:
+        """Ours deletes table X; theirs modifies table X → conflict, theirs kept."""
+        base = _schema_with_tables([_table("users"), _table("orders")])
+        # Ours deletes orders
+        ours = _schema_with_tables([_table("users")])
+        # Theirs adds a column to orders
+        theirs = _schema_with_tables([
+            _table("users"),
+            _table("orders", extra_cols=[_col("status", "string")]),
+        ])
+
+        result = merge_schemas(base, ours, theirs)
+
+        assert result.has_conflicts
+        assert any("orders" in msg for msg in result.conflicts)
+        # Theirs' modified version must be preserved
+        assert any(t.name == "orders" for t in result.schema.tables)
+        orders = next(t for t in result.schema.tables if t.name == "orders")
+        assert any(c.name == "status" for c in orders.columns)
+
+    def test_both_delete_unchanged_is_clean(self) -> None:
+        """Both sides delete a table that neither modified → clean merge, no conflict."""
+        base = _schema_with_tables([_table("users"), _table("temp")])
+        ours = _schema_with_tables([_table("users")])    # deleted temp (unchanged)
+        theirs = _schema_with_tables([_table("users")])  # also deleted temp (unchanged)
+
+        result = merge_schemas(base, ours, theirs)
+
+        assert not result.has_conflicts
+        assert not any(t.name == "temp" for t in result.schema.tables)
+
+    def test_delete_unchanged_entity_is_still_clean(self) -> None:
+        """Theirs deletes a table that ours left untouched → clean deletion, no conflict."""
+        base = _schema_with_tables([_table("users"), _table("temp")])
+        ours = _schema_with_tables([_table("users"), _table("temp")])  # unchanged
+        theirs = _schema_with_tables([_table("users")])                 # deleted temp
+
+        result = merge_schemas(base, ours, theirs)
+
+        assert not result.has_conflicts
+        assert not any(t.name == "temp" for t in result.schema.tables)
+
+    def test_add_and_delete_different_tables_is_clean(self) -> None:
+        """Ours adds table A; theirs deletes unmodified table B → clean merge."""
+        base = _schema_with_tables([_table("users"), _table("legacy")])
+        ours = _schema_with_tables([
+            _table("users"), _table("legacy"), _table("payments"),
+        ])
+        theirs = _schema_with_tables([_table("users")])  # deleted legacy (unchanged)
+
+        result = merge_schemas(base, ours, theirs)
+
+        assert not result.has_conflicts
+        names = {t.name for t in result.schema.tables}
+        assert "payments" in names    # ours' addition included
+        assert "legacy" not in names  # theirs' clean deletion honoured
+
+    def test_modify_vs_delete_exit_code_is_1(self, tmp_path: Path) -> None:
+        """run_merge_driver returns 1 when a modify-vs-delete conflict is found."""
+        base = _schema_with_tables([_table("users"), _table("orders")])
+        ours = _schema_with_tables([
+            _table("users"),
+            _table("orders", extra_cols=[_col("note", "string")]),
+        ])
+        theirs = _schema_with_tables([_table("users")])
+
+        base_p = tmp_path / "base.alter"
+        ours_p = tmp_path / "ours.alter"
+        theirs_p = tmp_path / "theirs.alter"
+        base.save(base_p); ours.save(ours_p); theirs.save(theirs_p)
+
+        code = run_merge_driver(str(base_p), str(ours_p), str(theirs_p))
+        assert code == 1

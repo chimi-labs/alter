@@ -312,59 +312,21 @@ def _sync_from_code_impl(
     schema = staging.current_schema
     parser = get_parser(schema.orm, project_root=project_root)
 
-    # Collect all unique model file paths referenced in the schema.
-    # Include enum file_path entries so that enum-only files (e.g. app/enums.py)
-    # are re-parsed when they change even if no table file directly imports them.
-    file_paths: set[str] = {t.file_path for t in schema.tables if t.file_path}
-    file_paths.update(e.file_path for e in schema.enums if e.file_path)
-    if not file_paths:
-        # Fall back to scanning the project root directory
-        result = parser.parse_directory(project_root)
-    else:
-        # Parse only the files we know about, collecting tables, enums AND relations.
-        # parse_file_result() is used (not parse_file) so that custom enum
-        # types referenced by columns survive the schema validation step.
-        all_tables = []
-        all_enums: list = []
-        all_relations: list = []
-        seen_enum_names: set[str] = set()
-        seen_rel_keys: set[tuple] = set()
-        skipped: list[Path] = []
-        for rel_path in sorted(file_paths):
-            abs_path = project_root / rel_path
-            if abs_path.exists():
-                try:
-                    file_result = parser.parse_file_result(abs_path)
-                    all_tables.extend(file_result.schema.tables)
-                    # Deduplicate enums: same name may appear in multiple file parses
-                    # (e.g. app/enums.py enums also appear when parsing starter.py
-                    # because parse_file_result follows imports transitively).
-                    for e in file_result.schema.enums:
-                        if e.name not in seen_enum_names:
-                            all_enums.append(e)
-                            seen_enum_names.add(e.name)
-                    # Collect relations; deduplicate by (from_table, from_column)
-                    for r in file_result.schema.relations:
-                        key = (r.from_table, r.from_column)
-                        if key not in seen_rel_keys:
-                            all_relations.append(r)
-                            seen_rel_keys.add(key)
-                except Exception:
-                    skipped.append(abs_path)
-        from alter.parsers.base import ParseResult  # noqa: PLC0415
-        partial = AlterSchema(
-            orm=schema.orm,
-            tables=all_tables,
-            enums=all_enums,
-            relations=all_relations,
-        )
-        result = ParseResult(schema=partial, skipped_files=skipped)
+    # Always scan the full project directory — same behaviour as `alter sync`.
+    # The previous per-file approach only re-parsed files already tracked in
+    # schema.alter, so new model files added after `alter init` were silently
+    # ignored by both the canvas "Sync from Code" button and the MCP tool.
+    result = parser.parse_directory(project_root)
 
-    # Preserve positions from the current schema
+    # Preserve canvas positions for tables that already existed.
     pos_map = {t.name: t.position for t in schema.tables}
     for t in result.schema.tables:
         if t.name in pos_map:
             t.position = pos_map[t.name]
+
+    # Auto-layout any brand-new tables still at the default (0, 0).
+    from alter.layout import auto_layout_tables  # noqa: PLC0415
+    auto_layout_tables(result.schema.tables)
 
     # Update and persist
     staging.current_schema = result.schema
@@ -1261,14 +1223,18 @@ def introspect_db(
             "Pass connection_string or set DATABASE_URL."
         )
 
+    staging = _get_staging()
+
     try:
         from alter.importers.database import import_from_database  # noqa: PLC0415
 
-        imported = import_from_database(cs, schema=schema)
+        imported = import_from_database(
+            cs,
+            schema=schema,
+            orm=staging.current_schema.orm,
+        )
     except Exception as exc:
         return f"Error introspecting database: {exc}"
-
-    staging = _get_staging()
 
     def apply(schema: AlterSchema) -> AlterSchema:
         s = copy.deepcopy(schema)

@@ -374,16 +374,26 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ── CORS ─────────────────────────────────────────────────────────────────
 
-    def _send_cors_headers(self) -> None:
-        """Append CORS headers so cross-origin clients can access the API.
+    def _canvas_origin(self) -> str:
+        """Return the canvas server's own origin, e.g. ``http://127.0.0.1:8080``."""
+        host, port = self.server.server_address
+        return f"http://{host}:{port}"
 
-        The server already binds to 127.0.0.1 only, so ``*`` is safe here —
-        it allows the canvas UI (which may be served from a different local
-        port during development) and browser extensions to reach the API.
+    def _send_cors_headers(self) -> None:
+        """Append CORS headers that restrict access to the canvas origin only.
+
+        Using ``Access-Control-Allow-Origin: *`` would allow any website the
+        user visits to make cross-origin requests to mutating endpoints (CSRF).
+        Reflecting the server's own origin means only requests that the canvas
+        page itself initiates will pass the browser's preflight check.
+
+        ``Vary: Origin`` is included so that caches do not serve a response
+        cached for one origin to a different origin.
         """
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self._canvas_origin())
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Vary", "Origin")
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         """Handle CORS preflight requests."""

@@ -190,6 +190,46 @@ class TestImportSqlDefaults:
         assert score.default == "0"
 
 
+class TestImportSqlDefaultParenExpressions:
+    """_DEFAULT_RE must capture parenthesized expressions containing spaces.
+
+    PostgreSQL's pg_dump sometimes emits defaults such as ``DEFAULT (1 + 2)``
+    or ``DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')``.  The old non-space
+    token fallback stopped at the first space, truncating the captured value.
+    """
+
+    def test_parenthesized_arithmetic_expression(self):
+        sql = "CREATE TABLE t (n INTEGER DEFAULT (1 + 2));"
+        col = import_sql(sql).schema.tables[0].columns[0]
+        assert col.default == "(1 + 2)"
+
+    def test_parenthesized_expression_with_spaces(self):
+        sql = "CREATE TABLE t (ts TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'));"
+        col = import_sql(sql).schema.tables[0].columns[0]
+        assert col.default == "(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')"
+
+    def test_bare_now_function_still_normalised_to_utcnow(self):
+        sql = "CREATE TABLE t (ts TIMESTAMPTZ DEFAULT now());"
+        col = import_sql(sql).schema.tables[0].columns[0]
+        assert col.default == "utcnow"
+
+    def test_plain_string_default_unchanged(self):
+        sql = "CREATE TABLE t (label TEXT DEFAULT 'hello');"
+        col = import_sql(sql).schema.tables[0].columns[0]
+        assert col.default == "hello"
+
+    def test_numeric_literal_unchanged(self):
+        sql = "CREATE TABLE t (score INTEGER DEFAULT 42);"
+        col = import_sql(sql).schema.tables[0].columns[0]
+        assert col.default == "42"
+
+    def test_nested_parens_one_level(self):
+        """Expressions like ``DEFAULT (abs(-1))`` (one level of nesting) are captured."""
+        sql = "CREATE TABLE t (n INTEGER DEFAULT (abs(-1)));"
+        col = import_sql(sql).schema.tables[0].columns[0]
+        assert col.default == "(abs(-1))"
+
+
 class TestImportSqlIfNotExists:
     def test_if_not_exists_handled(self):
         sql = "CREATE TABLE IF NOT EXISTS widgets (id UUID PRIMARY KEY);"

@@ -297,7 +297,14 @@ _CONSTRAINT_SPLIT_RE = re.compile(
 )
 
 _DEFAULT_RE = re.compile(
-    r"DEFAULT\s+('(?:[^']|'')*'|\S+)",
+    r"DEFAULT\s+"
+    r"("
+    r"'(?:[^']|'')*'"               # single-quoted string (handles '' escapes)
+    r"|"
+    r"\((?:[^()]*|\([^()]*\))*\)"   # parenthesized expression, one level of nesting
+    r"|"
+    r"\S+"                          # simple non-whitespace token
+    r")",
     re.IGNORECASE,
 )
 
@@ -353,12 +360,15 @@ def _parse_column_def(
     unique = "UNIQUE" in rest_upper
 
     # DEFAULT value
+    # Search `defn` (the original full column definition text) rather than the
+    # processed `rest`.  _COL_DEF_RE's optional size group `(?:\s*\(([^)]*)\))?`
+    # can accidentally consume a parenthesised DEFAULT expression such as
+    # `DEFAULT (1 + 2)`, stripping the parens before `rest` is assembled.
+    # Searching the raw `defn` bypasses that mangling.
     default: str | None = None
-    dm = _DEFAULT_RE.search(rest)
+    dm = _DEFAULT_RE.search(defn)
     if dm:
         raw_default = dm.group(1).strip()
-        # Normalise common defaults.  Strip trailing "()" before comparison
-        # because the regex may have consumed the parens as the "size" group.
         raw_upper_bare = raw_default.upper().rstrip("()")
         if raw_upper_bare in ("NOW", "CURRENT_TIMESTAMP"):
             default = "utcnow"

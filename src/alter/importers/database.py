@@ -61,6 +61,7 @@ _PG_TYPE_MAP: dict[str, str] = {
 def import_from_database(
     connection_string: str,
     schema: str = "public",
+    orm: str = "sqlmodel",
 ) -> AlterSchema:
     """Introspect a live PostgreSQL database and return an ``AlterSchema``.
 
@@ -78,6 +79,10 @@ def import_from_database(
             have ``schema_name`` set on the resulting ``Table`` objects so
             that generated SQL uses the fully-qualified ``schema.table``
             reference.
+        orm: ORM backend to stamp on the returned ``AlterSchema`` —
+            ``"sqlmodel"`` (default) or ``"sqlalchemy"``.  Callers should
+            pass the current project's ORM so that ``alter apply`` generates
+            code in the correct style.
 
     Returns:
         An ``AlterSchema`` with grid-positioned tables and relations.
@@ -103,7 +108,7 @@ def import_from_database(
         ) from exc
 
     try:
-        return _introspect(conn, schema=schema)
+        return _introspect(conn, schema=schema, orm=orm)
     finally:
         conn.close()
 
@@ -113,7 +118,7 @@ def import_from_database(
 # ---------------------------------------------------------------------------
 
 
-def _introspect(conn: object, schema: str = "public") -> AlterSchema:
+def _introspect(conn: object, schema: str = "public", orm: str = "sqlmodel") -> AlterSchema:
     """Run all introspection queries and build the schema.
 
     Args:
@@ -181,6 +186,14 @@ def _introspect(conn: object, schema: str = "public") -> AlterSchema:
     uq_cols: set[tuple[str, str]] = {(r[0], r[1]) for r in cursor.fetchall()}
 
     # ── Foreign keys ─────────────────────────────────────────────────────────
+    # Only single-column FK constraints are fetched.  Joining kcu (the
+    # referencing side) with ccu (the referenced side) on constraint_name alone
+    # produces a cartesian product for composite FKs — e.g. a two-column FK
+    # (a, b) REFERENCES t(x, y) would yield four rows (a→x, a→y, b→x, b→y)
+    # instead of two.  Since alter's data model stores FK references per column
+    # (Column.foreign_key is a single string), composite FK constraints cannot
+    # be represented accurately regardless; the subquery below skips them
+    # entirely to avoid producing wrong per-column mappings.
     cursor.execute(
         """
         SELECT tc.table_name, kcu.column_name,
@@ -198,6 +211,12 @@ def _introspect(conn: object, schema: str = "public") -> AlterSchema:
           ON tc.constraint_name  = rc.constraint_name
         WHERE tc.table_schema   = %s
           AND tc.constraint_type = 'FOREIGN KEY'
+          AND (
+              SELECT count(*)
+              FROM information_schema.key_column_usage k2
+              WHERE k2.constraint_name = tc.constraint_name
+                AND k2.table_schema    = tc.table_schema
+          ) = 1
         ORDER BY tc.table_name, kcu.column_name
         """,
         (schema,),
@@ -281,7 +300,7 @@ def _introspect(conn: object, schema: str = "public") -> AlterSchema:
             )
         )
 
-    schema = AlterSchema(orm="sqlmodel", tables=tables, relations=relations)
+    schema = AlterSchema(orm=orm, tables=tables, relations=relations)
     _auto_position(schema)
     return schema
 

@@ -66,11 +66,16 @@ class StagingManager:
         """
         base = self.proposed_schema if self.proposed_schema is not None else self.current_schema
 
-        # Save the pre-change proposed state for undo
+        # Run change_fn FIRST, before touching the stacks.  If it raises,
+        # _undo_stack and _redo_stack are left completely unchanged so no
+        # ghost entry is recorded and redo history is not silently wiped.
+        new_schema = change_fn(copy.deepcopy(base))
+
+        # Only modify stacks once the change has succeeded.
         self._undo_stack.append(copy.deepcopy(base))
         self._redo_stack.clear()
 
-        self.proposed_schema = change_fn(copy.deepcopy(base))
+        self.proposed_schema = new_schema
         return self.proposed_schema
 
     def undo(self) -> AlterSchema | None:

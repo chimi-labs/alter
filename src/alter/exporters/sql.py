@@ -148,5 +148,6 @@ def _format_default(default: str) -> str | None:
         return default
     except ValueError:
         pass
-    # String literal — wrap in single quotes
-    return f"'{default}'"
+    # String literal — wrap in single quotes, doubling any internal quotes
+    # (standard SQL escaping: don't → 'don''t').
+    return "'{}'".format(default.replace("'", "''"))

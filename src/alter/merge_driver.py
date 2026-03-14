@@ -55,8 +55,11 @@ def merge_schemas(
     --------
     - **Independent additions**: tables/relations/enums added on one side
       but not the other are included automatically.
-    - **Independent deletions**: entities dropped on one side but unchanged on
-      the other are removed automatically.
+    - **Independent deletions**: entities dropped on one side but *unchanged*
+      on the other are removed automatically.
+    - **Modify-vs-delete**: if one side modified an entity and the other
+      deleted it, a conflict is recorded and the modified version is kept
+      (matching standard git merge semantics for this case).
     - **Both sides added the same entity differently**: take *ours*, record
       a conflict.
     - **Both sides modified the same existing entity**: take *ours*, record
@@ -198,16 +201,32 @@ def _merge_entities(
 
         elif in_ours and not in_theirs:
             if in_base:
-                # Theirs deleted it — honour the deletion (omit from merged)
-                pass
+                # Theirs deleted it.  Check whether ours modified it first.
+                if our_map[key].model_dump_json() != base_map[key].model_dump_json():
+                    # Ours changed it AND theirs deleted it — conflict.
+                    # Keep the modified version so no work is silently lost.
+                    conflicts.append(
+                        f"{entity_type} '{key}': modified in ours but deleted "
+                        f"in theirs (keeping ours)"
+                    )
+                    merged[key] = copy.deepcopy(our_map[key])
+                # else: ours was unchanged — honour the deletion (omit)
             else:
                 # Only ours added it — include
                 merged[key] = copy.deepcopy(our_map[key])
 
         else:  # in_theirs and not in_ours
             if in_base:
-                # Ours deleted it — honour the deletion (omit from merged)
-                pass
+                # Ours deleted it.  Check whether theirs modified it first.
+                if their_map[key].model_dump_json() != base_map[key].model_dump_json():
+                    # Theirs changed it AND ours deleted it — conflict.
+                    # Keep the modified version so no work is silently lost.
+                    conflicts.append(
+                        f"{entity_type} '{key}': deleted in ours but modified "
+                        f"in theirs (keeping theirs)"
+                    )
+                    merged[key] = copy.deepcopy(their_map[key])
+                # else: theirs was unchanged — honour the deletion (omit)
             else:
                 # Only theirs added it — include
                 merged[key] = copy.deepcopy(their_map[key])

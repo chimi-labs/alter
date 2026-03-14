@@ -911,3 +911,56 @@ def test_update_new_table_does_not_touch_utcnow_in_existing_table() -> None:
     assert "lambda: datetime.now(timezone.utc)" not in result
     # New class appended
     assert "class Users(SQLModel, table=True):" in result or "class User(SQLModel, table=True):" in result
+
+
+# ---------------------------------------------------------------------------
+# default="dict" / default="list" handling
+# ---------------------------------------------------------------------------
+
+
+def _col(default: str) -> Column:
+    return Column(name="data", type="json", nullable=True, default=default)
+
+
+def test_default_dict_string_produces_default_factory_dict():
+    """default='dict' must emit default_factory=dict, not default='dict'."""
+    from alter.generators.sqlmodel import _field_args
+    result = _field_args(_col("dict"), set())
+    assert "default_factory=dict" in result
+    assert 'default="dict"' not in result
+
+
+def test_default_curly_braces_produces_default_factory_dict():
+    """default='{}' must still emit default_factory=dict (no regression)."""
+    from alter.generators.sqlmodel import _field_args
+    result = _field_args(_col("{}"), set())
+    assert "default_factory=dict" in result
+
+
+def test_default_list_string_produces_default_factory_list():
+    """default='list' must emit default_factory=list (no regression)."""
+    from alter.generators.sqlmodel import _field_args
+    result = _field_args(_col("list"), set())
+    assert "default_factory=list" in result
+    assert 'default="list"' not in result
+
+
+def test_default_square_brackets_produces_default_factory_list():
+    """default='[]' must still emit default_factory=list (no regression)."""
+    from alter.generators.sqlmodel import _field_args
+    result = _field_args(_col("[]"), set())
+    assert "default_factory=list" in result
+
+
+def test_generate_models_default_dict():
+    """Full code generation for a json column with default='dict'."""
+    schema = AlterSchema(
+        orm="sqlmodel",
+        tables=[Table(name="event", columns=[
+            Column(name="id", type="uuid", primary_key=True, nullable=False, default="uuid4"),
+            Column(name="payload", type="json", nullable=True, default="dict"),
+        ])],
+    )
+    code = gen().generate_models(schema)
+    assert "default_factory=dict" in code
+    assert 'default="dict"' not in code

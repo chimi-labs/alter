@@ -94,6 +94,6 @@ def _col_attr(col: Column) -> str:
         attrs.append("PK")
     if col.foreign_key:
         attrs.append("FK")
-    elif col.unique and not col.primary_key:
+    if col.unique and not col.primary_key:
         attrs.append("UK")
     return (" " + ",".join(attrs)) if attrs else ""

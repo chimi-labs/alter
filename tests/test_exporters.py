@@ -212,6 +212,76 @@ class TestExportMermaid:
         mermaid = export_mermaid(_simple_schema())
         assert mermaid.endswith("\n")
 
+    # --- _col_attr: FK+UK fix (elif → if) ---
+
+    def test_fk_and_unique_column_shows_both_annotations(self):
+        """Column that is both FK and unique must show FK,UK (one-to-one pattern)."""
+        from alter.exporters.mermaid import _col_attr
+        col = Column(
+            name="user_id", type="uuid",
+            foreign_key="users.id", unique=True,
+            nullable=False,
+        )
+        attr = _col_attr(col)
+        assert "FK" in attr
+        assert "UK" in attr
+
+    def test_fk_only_column_shows_fk_not_uk(self):
+        from alter.exporters.mermaid import _col_attr
+        col = Column(name="user_id", type="uuid", foreign_key="users.id", unique=False)
+        attr = _col_attr(col)
+        assert "FK" in attr
+        assert "UK" not in attr
+
+    def test_unique_only_column_shows_uk_not_fk(self):
+        from alter.exporters.mermaid import _col_attr
+        col = Column(name="email", type="string", unique=True)
+        attr = _col_attr(col)
+        assert "UK" in attr
+        assert "FK" not in attr
+
+    def test_pk_column_never_gets_uk_even_when_unique(self):
+        """Primary keys are implicitly unique; adding UK would be redundant."""
+        from alter.exporters.mermaid import _col_attr
+        col = Column(name="id", type="uuid", primary_key=True, unique=True, nullable=False)
+        attr = _col_attr(col)
+        assert "PK" in attr
+        assert "UK" not in attr
+
+    def test_full_export_one_to_one_relationship(self):
+        """Full export_mermaid with a FK+unique column must include FK,UK in output."""
+        schema = AlterSchema(
+            tables=[
+                Table(
+                    name="users",
+                    columns=[
+                        Column(name="id", type="uuid", primary_key=True, nullable=False),
+                    ],
+                ),
+                Table(
+                    name="profiles",
+                    columns=[
+                        Column(name="id", type="uuid", primary_key=True, nullable=False),
+                        Column(
+                            name="user_id", type="uuid",
+                            foreign_key="users.id", unique=True, nullable=False,
+                        ),
+                    ],
+                ),
+            ]
+        )
+        mermaid = export_mermaid(schema)
+        assert "FK" in mermaid
+        assert "UK" in mermaid
+        # Both annotations must appear together on the user_id line
+        for line in mermaid.splitlines():
+            if "user_id" in line:
+                assert "FK" in line
+                assert "UK" in line
+                break
+        else:
+            pytest.fail("user_id column line not found in mermaid output")
+
 
 # ---------------------------------------------------------------------------
 # Schema-qualified names — SQL exporter
@@ -420,3 +490,51 @@ class TestSqlRoundTrip:
         )
         assert email is not None
         assert email.nullable is False
+
+
+# ---------------------------------------------------------------------------
+# _format_default — single-quote escaping
+# ---------------------------------------------------------------------------
+
+
+class TestFormatDefaultQuoteEscaping:
+    """_format_default must produce valid SQL for string defaults with quotes."""
+
+    def setup_method(self):
+        from alter.exporters.sql import _format_default
+        self._fmt = _format_default
+
+    def test_apostrophe_in_default_is_escaped(self):
+        assert self._fmt("it's") == "'it''s'"
+
+    def test_name_with_apostrophe_is_escaped(self):
+        assert self._fmt("O'Brien") == "'O''Brien'"
+
+    def test_plain_string_unchanged(self):
+        assert self._fmt("no quotes") == "'no quotes'"
+
+    def test_all_quotes_string(self):
+        # Input: three single quotes.  Each is doubled → six quotes inside,
+        # then wrapped in a pair of delimiters → eight single quotes total.
+        result = self._fmt("'" * 3)
+        expected = "'" + "''" * 3 + "'"   # = '''''''' (8 chars)
+        assert result == expected
+
+    def test_multiple_apostrophes_all_escaped(self):
+        result = self._fmt("it's a test, isn't it")
+        assert result == "'it''s a test, isn''t it'"
+
+    def test_export_sql_with_quoted_default(self):
+        """Full export_sql pipeline: column default with apostrophe → valid DDL."""
+        from alter.exporters.sql import export_sql
+        from alter.schema import AlterSchema, Column, Table
+        schema = AlterSchema(
+            orm="sqlmodel",
+            tables=[Table(name="greet", columns=[
+                Column(name="id", type="uuid", primary_key=True, nullable=False),
+                Column(name="label", type="string", nullable=True, default="it's"),
+            ])],
+        )
+        sql = export_sql(schema)
+        assert "DEFAULT 'it''s'" in sql
+        assert "DEFAULT 'it's'" not in sql  # the broken form must be absent

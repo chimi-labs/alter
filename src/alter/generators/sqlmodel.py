@@ -78,12 +78,10 @@ def _field_args(col: Column, enum_names: set[str]) -> str:
         args.append("default_factory=lambda: datetime.now(timezone.utc)")
     elif col.default == "now":
         args.append("default_factory=datetime.now")
-    elif col.default == "list":
+    elif col.default in ("list", "[]"):
         args.append("default_factory=list")
-    elif col.default == "{}":
+    elif col.default in ("dict", "{}"):
         args.append("default_factory=dict")
-    elif col.default == "[]":
-        args.append("default_factory=list")
     elif col.default is not None:
         raw = col.default
         if raw == "true":

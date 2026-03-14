@@ -103,9 +103,9 @@ def _mapped_column_args(col: Column, enum_names: set[str]) -> str:
         args.append("default=lambda: datetime.now(timezone.utc)")
     elif col.default == "now":
         args.append("default=datetime.now")
-    elif col.default == "{}":
+    elif col.default in ("dict", "{}"):
         args.append("default=dict")
-    elif col.default == "[]":
+    elif col.default in ("list", "[]"):
         args.append("default=list")
     elif col.default is not None:
         raw = col.default
