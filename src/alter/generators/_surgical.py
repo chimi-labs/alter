@@ -186,6 +186,48 @@ def _parse_field_kwargs(line: str) -> dict[str, str] | None:
     return kw
 
 
+def _parse_field_kwargs_raw_text(field_text: str) -> dict[str, str]:
+    """Return ``{kwarg_name: "kwarg_name=raw_value"}`` for each keyword arg.
+
+    Unlike :func:`_parse_field_kwargs`, which normalises values through
+    ``ast.unparse``, this function extracts the **verbatim source text** of
+    each keyword argument value using AST column-offset information.  This
+    lets :func:`_rebuild_field_line` re-emit *unchanged* kwargs byte-for-byte,
+    preserving the original quote style (e.g. ``foreign_key="user.id"`` rather
+    than ``foreign_key='user.id'``).
+
+    Only keyword arguments are included; positional args fall back to the
+    ``ast.unparse``'d form in the caller.
+    """
+    # Join multi-line text to a single line (same approach as _parse_field_kwargs)
+    joined = " ".join(field_text.splitlines())
+    for sep in ("= Field(", "= mapped_column("):
+        pos = joined.find(sep)
+        if pos != -1:
+            rhs = joined[pos + 2:].strip()
+            break
+    else:
+        return {}
+
+    try:
+        tree = ast.parse(rhs, mode="eval")
+    except SyntaxError:
+        return {}
+
+    if not isinstance(tree.body, ast.Call):
+        return {}
+
+    result: dict[str, str] = {}
+    for kw in tree.body.keywords:
+        if kw.arg is None:
+            continue  # **kwargs splat — skip
+        val_start = kw.value.col_offset
+        val_end = kw.value.end_col_offset
+        raw_val = rhs[val_start:val_end]
+        result[kw.arg] = f"{kw.arg}={raw_val}"
+    return result
+
+
 def _field_lhs(line: str) -> str:
     """Return the ``name: Type`` portion of a field line (normalised whitespace).
 
@@ -241,6 +283,10 @@ _DEFAULT_FACTORY_EQUIV: dict[str, str] = {
     # NOTE: the canonical form uses the exact string produced by ast.unparse(),
     # which inserts a space between "lambda" and ":" (i.e. "lambda :").
     "datetime.utcnow": "lambda : datetime.now(timezone.utc)",
+    # uuid4 (from `from uuid import uuid4`) and uuid.uuid4 (from `import uuid`)
+    # are semantically identical.  Treat them as equal so existing hand-written
+    # code using the direct-import form is never touched.
+    "uuid4": "uuid.uuid4",
 }
 
 
@@ -379,6 +425,10 @@ def _rebuild_field_line(
     new_kw = _parse_field_kwargs(new_schema_line) or {}
     existing_order = _get_kwarg_order(existing_text)
 
+    # Raw (verbatim) kwarg text from the existing source — used to preserve
+    # the original quote style for string values that haven't changed (Bug 17).
+    existing_raw = _parse_field_kwargs_raw_text(existing_text)
+
     # Preserve any trailing inline comment (Bug 8 — fix 3)
     trailing_comment = _extract_trailing_comment(existing_text)
 
@@ -410,9 +460,16 @@ def _rebuild_field_line(
                 merged.append(val)  # positional
             elif key == "default_factory" and _DEFAULT_FACTORY_EQUIV.get(existing_val) == val:
                 # The existing value is a known equivalent of what the generator
-                # produces (e.g. datetime.utcnow ↔ lambda: datetime.now(timezone.utc)).
+                # produces (e.g. datetime.utcnow ↔ lambda: datetime.now(timezone.utc),
+                # uuid4 ↔ uuid.uuid4).
                 # Preserve the user's original form so we don't introduce noisy diffs.
                 merged.append(f"default_factory={existing_val}")
+            elif existing_val == val and key in existing_raw:
+                # Value unchanged — preserve the original raw text verbatim so
+                # that e.g. double-quoted strings (foreign_key="user.id") are
+                # not silently rewritten to single-quoted form by ast.unparse
+                # (Bug 17 — quote style preservation).
+                merged.append(existing_raw[key])
             else:
                 merged.append(f"{key}={val}")
             seen.add(key)

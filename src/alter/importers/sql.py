@@ -12,10 +12,11 @@ from typing import Optional
 
 import sqlparse
 from sqlparse.sql import Parenthesis, Statement
-from sqlparse.tokens import Keyword, DDL, Punctuation
+from sqlparse.tokens import Keyword, DDL
 
-from alter.schema import AlterSchema, Column, Relation, Table, Position
+from alter.schema import AlterSchema, Column, Relation, Table
 from alter.types import sql_to_alter
+from alter.layout import grid_position
 
 
 @dataclass
@@ -33,31 +34,27 @@ class ImportResult:
 
 
 # ---------------------------------------------------------------------------
-# Grid auto-layout for imported tables
-# ---------------------------------------------------------------------------
-
-_GRID_COL_W = 300  # horizontal spacing
-_GRID_ROW_H = 260  # vertical spacing
-_GRID_COLS = 4     # tables per row
-
-
-def _auto_position(index: int) -> Position:
-    col = index % _GRID_COLS
-    row = index // _GRID_COLS
-    return Position(x=col * _GRID_COL_W + 50, y=row * _GRID_ROW_H + 50)
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def import_sql(sql: str, orm: str = "sqlmodel") -> ImportResult:
+_DEFAULT_FILE_PATH = "app/models.py"
+
+
+def import_sql(
+    sql: str,
+    orm: str = "sqlmodel",
+    file_path: str = _DEFAULT_FILE_PATH,
+) -> ImportResult:
     """Parse *sql* (one or more ``CREATE TABLE`` statements) → :class:`ImportResult`.
 
     Args:
-        sql:  Raw SQL DDL string.
-        orm:  ORM to record in the resulting schema (default ``"sqlmodel"``).
+        sql:       Raw SQL DDL string.
+        orm:       ORM to record in the resulting schema (default ``"sqlmodel"``).
+        file_path: Relative path to the ORM model file that will hold the
+                   generated code.  Defaults to ``"app/models.py"``.  Callers
+                   should pass ``schema.metadata.sqlmodel_module`` so that
+                   ``alter apply`` writes to the correct location.
 
     Returns:
         An :class:`ImportResult` whose ``schema`` contains tables, columns,
@@ -85,8 +82,8 @@ def import_sql(sql: str, orm: str = "sqlmodel") -> ImportResult:
         tables.append(
             Table(
                 name=table_name,
-                file_path="app/models.py",
-                position=_auto_position(table_index),
+                file_path=file_path,
+                position=grid_position(table_index),
                 columns=columns,
             )
         )

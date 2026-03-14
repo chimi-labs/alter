@@ -292,6 +292,72 @@ def test_sql_to_alter_bytea() -> None:
     assert sql_to_alter("BYTEA") == "bytes"
 
 
+# Integer family aliases (the original Bug 12 gap)
+def test_sql_to_alter_smallint() -> None:
+    assert sql_to_alter("SMALLINT") == "int"
+
+
+def test_sql_to_alter_int2() -> None:
+    assert sql_to_alter("INT2") == "int"
+
+
+def test_sql_to_alter_tinyint() -> None:
+    assert sql_to_alter("TINYINT") == "int"
+
+
+def test_sql_to_alter_serial() -> None:
+    assert sql_to_alter("SERIAL") == "int"
+
+
+def test_sql_to_alter_smallserial() -> None:
+    assert sql_to_alter("SMALLSERIAL") == "int"
+
+
+def test_sql_to_alter_bigserial() -> None:
+    assert sql_to_alter("BIGSERIAL") == "bigint"
+
+
+# Float aliases
+def test_sql_to_alter_float4() -> None:
+    assert sql_to_alter("FLOAT4") == "float"
+
+
+def test_sql_to_alter_float8() -> None:
+    assert sql_to_alter("FLOAT8") == "float"
+
+
+def test_sql_to_alter_real() -> None:
+    assert sql_to_alter("REAL") == "float"
+
+
+def test_sql_to_alter_double_precision_already_covered() -> None:
+    # Existing mapping — confirm it still works after the edit
+    assert sql_to_alter("DOUBLE PRECISION") == "float"
+
+
+# Decimal aliases
+def test_sql_to_alter_money() -> None:
+    assert sql_to_alter("MONEY") == "decimal"
+
+
+def test_sql_to_alter_decimal_keyword() -> None:
+    assert sql_to_alter("DECIMAL") == "decimal"
+
+
+def test_sql_to_alter_numeric_with_precision() -> None:
+    # NUMERIC(10,2) strips the parenthesised part before lookup
+    assert sql_to_alter("NUMERIC(10,2)") == "decimal"
+
+
+def test_sql_to_alter_smallint_lowercase() -> None:
+    # sql_to_alter normalises to uppercase internally
+    assert sql_to_alter("smallint") == "int"
+
+
+def test_sql_to_alter_serial_lowercase() -> None:
+    assert sql_to_alter("serial") == "int"
+
+
 def test_sql_to_alter_lowercase_input() -> None:
     # Should normalise to uppercase
     assert sql_to_alter("text") == "text"

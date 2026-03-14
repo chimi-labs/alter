@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
 import time
@@ -219,6 +218,8 @@ def init(orm_override: str | None, output: str | None, force: bool) -> None:
         for fp in result.skipped_files:
             click.echo(f"  ⚠  Skipped (parse error): {fp.relative_to(cwd)}", err=True)
 
+    from alter.layout import auto_layout_tables
+    auto_layout_tables(result.schema.tables)
     result.schema.save(out_path)
     click.echo(
         f"  Created {out_path.name} — "
@@ -228,21 +229,6 @@ def init(orm_override: str | None, output: str | None, force: bool) -> None:
     if result.warnings:
         for w in result.warnings:
             click.echo(f"  ⚠  {w}", err=True)
-
-
-def _match_file_paths(schema: "AlterSchema", cwd: Path, orm: str) -> None:  # type: ignore[name-defined]
-    """Try to match tables to existing ORM model files by class name / __tablename__."""
-    try:
-        from alter.parsers.base import get_parser
-        parser = get_parser(orm, project_root=cwd)
-        for model_dir in _find_model_dirs(cwd):
-            result = parser.parse_directory(model_dir)
-            name_to_file = {t.name: t.file_path for t in result.schema.tables if t.file_path}
-            for tbl in schema.tables:
-                if tbl.name in name_to_file:
-                    tbl.file_path = name_to_file[tbl.name]
-    except Exception:
-        pass  # matching is best-effort
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +275,14 @@ def sync(alter_file: str | None, model_dir: str | None) -> None:
         for fp in result.skipped_files:
             click.echo(f"  ⚠  Skipped (parse error): {fp.relative_to(cwd) if fp.is_relative_to(cwd) else fp}", err=True)
 
-    # Preserve canvas positions
+    # Preserve canvas positions for tables that already existed.
     for tbl in new_schema.tables:
         if tbl.name in pos_map:
             tbl.position = pos_map[tbl.name]
 
+    # Auto-layout any brand-new tables that are still at the default (0, 0).
+    from alter.layout import auto_layout_tables
+    auto_layout_tables(new_schema.tables)
     new_schema.save(path)
 
     skip_note = f" ({len(result.skipped_files)} file{'s' if len(result.skipped_files) != 1 else ''} skipped with errors)" if result.skipped_files else ""
@@ -371,6 +360,9 @@ def add_cmd(path: str, alter_file: str | None) -> None:
         if enum.name not in existing_enums:
             schema.enums.append(enum)
 
+    # Auto-layout tables that were just added (still at the default 0, 0).
+    from alter.layout import auto_layout_tables
+    auto_layout_tables(schema.tables)
     schema.save(alter_path)
 
     if added:
@@ -437,7 +429,7 @@ def apply(alter_file: str | None, preview: bool) -> None:
             else:
                 existing = ""
                 updated = gen.generate_models(file_schema, local_enum_names=local_enum_names)
-        except (AlterError, Exception) as exc:
+        except Exception as exc:
             click.echo(f"  ✗  {rel_path}: {exc}", err=True)
             sys.exit(1)
 
@@ -506,7 +498,7 @@ def diff(alter_file: str | None, fmt: str) -> None:
         parser = get_parser(current.orm, project_root=cwd)
         result = parser.parse_directory(scan_dir)
         code_schema = result.schema
-    except (AlterError, Exception) as exc:
+    except Exception as exc:
         raise click.ClickException(f"Parser error: {exc}") from exc
     changes = diff_schemas(current, code_schema)
     source_label = "code"
@@ -611,8 +603,12 @@ def import_cmd(source: str, alter_file: str | None, fmt: str | None) -> None:
         else:
             from alter.importers.sql import import_sql
             from alter.schema import AlterSchema
-            current_orm = AlterSchema.load(path).orm
-            result = import_sql(src_path.read_text(), orm=current_orm)
+            current_schema = AlterSchema.load(path)
+            result = import_sql(
+                src_path.read_text(),
+                orm=current_schema.orm,
+                file_path=current_schema.metadata.sqlmodel_module,
+            )
             imported = result.schema
             import_warnings = result.warnings
     except AlterError as exc:

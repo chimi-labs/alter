@@ -8,7 +8,6 @@ Python source code.  Supports the same three modes as the SQLModel generator:
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 from alter.generators._surgical import surgical_update_class, surgical_update_enum_class
 
@@ -16,12 +15,11 @@ from alter.generators.base import (
     BaseGenerator,
     _class_name,
     _collect_stdlib_imports,
-    _default_model_path,
     _safe_member_name,
     generate_enum_class,
 )
 from alter.schema import AlterSchema, Column, EnumDef, Table
-from alter.types import alter_to_python, alter_to_sql, is_enum_type
+from alter.types import alter_to_python
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,131 @@
 
 All notable changes to Alter are documented here.
 
+## [0.2.0] — 2026-03-14
+
+### New Features
+
+#### `add_table` MCP tool now accepts a `columns` list
+
+- `add_table` previously ignored any column definitions and always seeded a
+  single `id uuid PRIMARY KEY` column.  The tool now accepts an optional
+  `columns` parameter — a list of column-spec dicts supporting `name`, `type`,
+  `primary_key`, `nullable`, `unique`, `default`, `max_length`, `foreign_key`,
+  and `index` keys.
+- When `columns` is omitted or empty the original default-id behaviour is
+  preserved.  When provided, each column spec is fully validated (type,
+  FK target existence) before any mutation occurs.
+- FK columns automatically create a `Relation` object; `index: true` columns
+  create a non-unique `Index`.
+- Added 14 tests covering: all columns created, no spurious default-id,
+  empty-list fallback, PK non-nullable, nullable defaults, explicit
+  `nullable=False`, FK relation created, invalid FK error, invalid type error,
+  missing name/type errors, index creation, return message count.
+
+#### `add_column` MCP tool gains an `index` parameter
+
+- `add_column` now accepts `index: bool = False`.  Passing `index=True` appends
+  a non-unique `Index(columns=[name])` to the table alongside the new column.
+- Type validation (`_validate_column_type`) is now applied in `add_column` so
+  unknown types are rejected before the schema is touched.
+
+#### `modify_column` MCP tool gains `primary_key`, `foreign_key`, and `index` parameters
+
+- `primary_key: bool | None` — sets or clears the PK flag; also forces
+  `nullable=False` when setting to `True`.
+- `foreign_key: str | None` — validates the new FK target, removes the old
+  `Relation` for this column, and appends a new one.  Pass `foreign_key=None`
+  to remove an existing FK and its relation entirely.
+- `index: bool | None` — `True` adds a non-unique index if one does not already
+  exist; `False` drops the existing non-unique single-column index.
+- Type changes in `modify_column` are now validated via `_validate_column_type`
+  before being applied.
+- `Pass foreign_key=None to remove an existing foreign key reference` is now
+  documented in the tool docstring.
+
+#### `introspect_db` MCP tool and `import_from_database` gain a `schema` parameter
+
+- Both `introspect_db` (MCP) and `import_from_database()` previously queried
+  only the `public` PostgreSQL schema — all six SQL queries had the schema name
+  hardcoded as a string literal.
+- Added `schema: str = "public"` to both.  All six queries now use a `%s`
+  parameterised placeholder to avoid any SQL-injection risk and to support
+  non-default schemas (e.g. `"myapp"`, `"analytics"`).
+- Tables from a non-`public` schema have `schema_name` set on the resulting
+  `Table` objects so generated SQL uses fully-qualified `schema.table`
+  references.
+- Added 26 tests: schema value flows into all 6 queries, no hardcoded
+  `'public'` literals, public schema → no `schema_name` set, custom schema →
+  `schema_name` set, `Table`/`Column`/PK/relation/position construction.
+
+#### Canvas server now sets CORS headers
+
+- The canvas HTTP server (`canvas/server.py`) responded without any
+  `Access-Control-*` headers, blocking cross-origin access from browser
+  extensions and locally-served UIs.
+- Added `_send_cors_headers()` helper and `do_OPTIONS()` preflight handler to
+  `_Handler`.  CORS headers are now appended in both `_send()` (regular
+  responses) and `_serve_events()` (SSE stream).
+- 16 tests using a real `CanvasServer` on an OS-assigned port, covering GET,
+  POST, 404, and OPTIONS preflight on both mapped and unmapped paths.
+
+### Fixed
+
+#### `alter apply` makes unnecessary changes to working code (Bug 17)
+
+Three independent causes of spurious diffs when running `alter apply` on
+already-correct model files:
+
+1. **`uuid4` rewritten to `uuid.uuid4`** — `_DEFAULT_FACTORY_EQUIV` lacked an
+   entry for `uuid4` (the direct-import form).  Added `"uuid4": "uuid.uuid4"`
+   so the two forms are recognised as equivalent and the existing hand-written
+   form is preserved verbatim.
+
+2. **`import uuid` injected when not needed** — the import-insertion pass
+   (`_insert_missing_imports`) already filters out imports for names not
+   referenced in the new output; this was already correct once fix 1 stopped
+   the `uuid4→uuid.uuid4` rewrite.
+
+3. **Double-quoted strings rewritten to single-quoted** — `ast.unparse()`
+   normalises all strings to single quotes, so unchanged `foreign_key="user.id"`
+   kwargs were being rewritten.  Added `_parse_field_kwargs_raw_text()`, which
+   uses AST column-offset information to extract verbatim kwarg text, and a new
+   branch in `_rebuild_field_line()` that re-emits the raw text for unchanged
+   string kwargs.
+
+22 tests covering: `_normalize_kw_for_eq` uuid4 equivalence,
+`_field_kwargs_equal` uuid4↔uuid.uuid4, `_parse_field_kwargs_raw_text`,
+`_rebuild_field_line` uuid4/quote preservation, `surgical_update_class` no-op
+for uuid4, `update_models` no spurious `import uuid`/`timezone` injection,
+double-quoted FK preservation in full round-trip.
+
+### Cleanup
+
+#### Unused imports and dead code removed
+
+- `generators/sqlmodel.py`: removed `import keyword`, `from pathlib import
+  Path`, `_default_model_path`, `_imported_names`, `is_enum_type`.
+- `generators/sqlalchemy.py`: removed `from pathlib import Path`,
+  `_default_model_path`, `alter_to_sql`, `is_enum_type`.
+- `mcp_server.py`: removed `diff_schemas`, `EnumDef` unused imports; removed
+  dead `col_ref` variable in `modify_column`.
+- `canvas/server.py`: removed `SchemaChange`, `diff_schemas` unused imports;
+  removed dead `Relation as Rel` local import, `cur_tables`/`cur` dead
+  variables in `_migration_sql`.
+- `importers/database.py`: removed `from pathlib import Path`, `Position`
+  unused import.
+- `importers/sql.py`: removed `Punctuation` unused import.
+- `cli.py`: removed `import os` unused import; removed dead `_match_file_paths()`
+  function (defined but never called).
+
+#### Redundant exception tuples collapsed
+
+- `except (AlterError, Exception)` is logically equivalent to `except Exception`
+  since `AlterError` is a subclass of `Exception`.  All six occurrences across
+  `cli.py` and `mcp_server.py` replaced with `except Exception`.
+- Also collapsed the pre-existing `except (ImportError, RuntimeError, Exception)`
+  in `introspect_db` for the same reason.
+
 ## [0.1.9] — 2026-03-12
 
 ### Fixed

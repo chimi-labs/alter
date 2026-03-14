@@ -75,6 +75,30 @@ class Table(BaseModel):
     bases: list[str] = Field(default_factory=list)  # Python base class names (e.g. ["UUIDBase"])
     schema_name: Optional[str] = None  # PostgreSQL schema (e.g. "myschema"); round-trips via __table_args__
 
+    @model_validator(mode="after")
+    def _check_unique_columns(self) -> "Table":
+        """Raise if any column name appears more than once within this table.
+
+        Duplicate column names always produce invalid SQL (e.g. two
+        ``description TEXT`` lines in a ``CREATE TABLE`` statement) and are
+        never intentional.  This check runs unconditionally — there is no
+        ``strict=False`` bypass because structural integrity of a single table
+        does not depend on the broader schema context.
+        """
+        names = [c.name for c in self.columns]
+        seen: set[str] = set()
+        dupes: set[str] = set()
+        for n in names:
+            if n in seen:
+                dupes.add(n)
+            seen.add(n)
+        if dupes:
+            raise ValueError(
+                f"Duplicate column names in table '{self.name}': "
+                f"{', '.join(sorted(dupes))}"
+            )
+        return self
+
 
 class Relation(BaseModel):
     """A foreign-key relation between two tables."""
@@ -189,6 +213,45 @@ class AlterSchema(BaseModel):
                         f"Column '{table.name}.{col.name}' has unknown type '{col.type}'. "
                         f"It is not a built-in type and does not match any defined enum."
                     )
+        return self
+
+    @model_validator(mode="after")
+    def _check_uniqueness(self) -> "AlterSchema":
+        """Check for duplicate table names and relation names.
+
+        Skipped when ``strict=False`` because parsers build schemas
+        incrementally (adding tables one file at a time) and run
+        ``deduplicate_tables()`` as a post-processing step.
+        """
+        if not self.strict:
+            return self
+
+        # Duplicate table names
+        table_names = [t.name for t in self.tables]
+        seen: set[str] = set()
+        dupes: set[str] = set()
+        for n in table_names:
+            if n in seen:
+                dupes.add(n)
+            seen.add(n)
+        if dupes:
+            raise ValueError(
+                f"Duplicate table names in schema: {', '.join(sorted(dupes))}"
+            )
+
+        # Duplicate relation names
+        rel_names = [r.name for r in self.relations]
+        seen = set()
+        dupes = set()
+        for n in rel_names:
+            if n in seen:
+                dupes.add(n)
+            seen.add(n)
+        if dupes:
+            raise ValueError(
+                f"Duplicate relation names in schema: {', '.join(sorted(dupes))}"
+            )
+
         return self
 
     # ------------------------------------------------------------------

@@ -127,6 +127,134 @@ def test_add_table_custom_file_path() -> None:
     assert tbl.file_path == "app/billing/models.py"
 
 
+def test_add_table_with_columns_creates_all_columns() -> None:
+    msg = add_table(
+        "invoice",
+        columns=[
+            {"name": "id", "type": "int", "primary_key": True},
+            {"name": "amount", "type": "decimal"},
+        ],
+    )
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "invoice")
+    col_names = [c["name"] for c in tbl["columns"]]
+    assert "id" in col_names
+    assert "amount" in col_names
+    assert len(col_names) == 2
+
+
+def test_add_table_with_columns_no_default_id_seeded() -> None:
+    """When columns are provided, the hardcoded default id column must NOT be seeded."""
+    add_table("product", columns=[{"name": "sku", "type": "string", "primary_key": True}])
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "product")
+    assert len(tbl["columns"]) == 1
+    assert tbl["columns"][0]["name"] == "sku"
+
+
+def test_add_table_with_empty_columns_seeds_default() -> None:
+    """Empty columns list falls back to the default id column."""
+    add_table("empty_cols", columns=[])
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "empty_cols")
+    assert any(c["name"] == "id" for c in tbl["columns"])
+
+
+def test_add_table_with_columns_primary_key_not_nullable() -> None:
+    add_table(
+        "orders",
+        columns=[{"name": "id", "type": "uuid", "primary_key": True}],
+    )
+    staging = ms._get_staging()
+    proposed = staging.proposed_schema
+    tbl = next(t for t in proposed.tables if t.name == "orders")
+    col = next(c for c in tbl.columns if c.name == "id")
+    assert col.primary_key is True
+    assert col.nullable is False
+
+
+def test_add_table_with_columns_nullable_defaults_true() -> None:
+    add_table("items", columns=[{"name": "note", "type": "string"}])
+    staging = ms._get_staging()
+    proposed = staging.proposed_schema
+    tbl = next(t for t in proposed.tables if t.name == "items")
+    col = next(c for c in tbl.columns if c.name == "note")
+    assert col.nullable is True
+
+
+def test_add_table_with_columns_explicit_nullable_false() -> None:
+    add_table("items", columns=[{"name": "note", "type": "string", "nullable": False}])
+    staging = ms._get_staging()
+    proposed = staging.proposed_schema
+    tbl = next(t for t in proposed.tables if t.name == "items")
+    col = next(c for c in tbl.columns if c.name == "note")
+    assert col.nullable is False
+
+
+def test_add_table_with_columns_fk_creates_relation() -> None:
+    # Seed target table first
+    add_table("users")
+    msg = add_table(
+        "posts",
+        columns=[
+            {"name": "id", "type": "int", "primary_key": True},
+            {"name": "user_id", "type": "uuid", "foreign_key": "users.id"},
+        ],
+    )
+    assert "Error" not in msg
+    staging = ms._get_staging()
+    proposed = staging.proposed_schema
+    rels = [r for r in proposed.relations if r.from_table == "posts" and r.from_column == "user_id"]
+    assert len(rels) == 1
+    assert rels[0].to_table == "users"
+    assert rels[0].to_column == "id"
+
+
+def test_add_table_with_columns_invalid_fk_returns_error() -> None:
+    msg = add_table(
+        "posts",
+        columns=[{"name": "user_id", "type": "uuid", "foreign_key": "nonexistent.id"}],
+    )
+    assert msg.startswith("Error:")
+
+
+def test_add_table_with_columns_invalid_type_returns_error() -> None:
+    msg = add_table("things", columns=[{"name": "x", "type": "notavalidtype"}])
+    assert msg.startswith("Error:")
+
+
+def test_add_table_with_columns_missing_name_returns_error() -> None:
+    msg = add_table("things", columns=[{"type": "int"}])
+    assert msg.startswith("Error:")
+
+
+def test_add_table_with_columns_missing_type_returns_error() -> None:
+    msg = add_table("things", columns=[{"name": "x"}])
+    assert msg.startswith("Error:")
+
+
+def test_add_table_with_columns_index_creates_index() -> None:
+    add_table("events", columns=[{"name": "slug", "type": "string", "index": True}])
+    staging = ms._get_staging()
+    proposed = staging.proposed_schema
+    tbl = next(t for t in proposed.tables if t.name == "events")
+    assert any("slug" in idx.columns for idx in tbl.indexes)
+
+
+def test_add_table_with_columns_return_message_includes_count() -> None:
+    msg = add_table(
+        "multi",
+        columns=[
+            {"name": "id", "type": "int", "primary_key": True},
+            {"name": "val", "type": "string"},
+            {"name": "ts", "type": "datetime"},
+        ],
+    )
+    assert "3" in msg
+    assert "multi" in msg
+
+
 # ---------------------------------------------------------------------------
 # add_column
 # ---------------------------------------------------------------------------
@@ -209,6 +337,119 @@ def test_add_column_fk_invalid_format_returns_error() -> None:
     add_table("users")
     msg = add_column("users", "x", "uuid", foreign_key="no_dot_here")
     assert msg.startswith("Error:")
+
+
+# ---------------------------------------------------------------------------
+# add_column — type validation
+# ---------------------------------------------------------------------------
+
+
+def test_add_column_invalid_type_returns_error() -> None:
+    """Completely invalid type like 'invalid_type' returns an Error message."""
+    add_table("users")
+    msg = add_column("users", "test_col", "invalid_type")
+    assert msg.startswith("Error:")
+    assert "invalid_type" in msg
+
+
+def test_add_column_invalid_type_not_added_to_schema() -> None:
+    """Schema must not change when add_column is called with an invalid type."""
+    add_table("users")
+    add_column("users", "id", "uuid")
+    before = read_proposed()
+    add_column("users", "bad", "garbage_type")
+    after = read_proposed()
+    users_before = next(t for t in before["tables"] if t["name"] == "users")
+    users_after = next(t for t in after["tables"] if t["name"] == "users")
+    assert len(users_before["columns"]) == len(users_after["columns"])
+
+
+def test_add_column_invalid_type_error_message_lists_valid_types() -> None:
+    """Error message must include a list of valid built-in types."""
+    add_table("users")
+    msg = add_column("users", "x", "foobar")
+    assert "uuid" in msg
+    assert "string" in msg
+    assert "int" in msg
+
+
+def test_add_column_all_builtin_types_accepted() -> None:
+    """Every type in TYPE_MAP must be accepted without error."""
+    from alter.types import TYPE_MAP
+    add_table("items")
+    for i, col_type in enumerate(TYPE_MAP.keys()):
+        msg = add_column("items", f"col_{i}", col_type)
+        assert not msg.startswith("Error:"), (
+            f"Built-in type '{col_type}' was wrongly rejected: {msg}"
+        )
+
+
+def test_add_column_enum_type_accepted_when_enum_defined() -> None:
+    """A PascalCase type name matching a schema enum must be accepted."""
+    import alter.mcp_server as ms
+    from alter.schema import EnumDef
+    import copy
+
+    add_table("users")
+
+    def _add_enum(schema):
+        s = copy.deepcopy(schema)
+        s.enums.append(EnumDef(name="UserRole", values=["admin", "user"]))
+        return s
+
+    ms._get_staging().propose(_add_enum)
+    msg = add_column("users", "role", "UserRole")
+    assert not msg.startswith("Error:"), f"Valid enum type rejected: {msg}"
+
+
+def test_add_column_enum_type_rejected_when_not_defined() -> None:
+    """A PascalCase type that is NOT a defined enum must be rejected."""
+    add_table("users")
+    msg = add_column("users", "role", "UndefinedEnum")
+    assert msg.startswith("Error:")
+    assert "UndefinedEnum" in msg
+
+
+def test_add_column_lowercase_enum_name_rejected() -> None:
+    """A lowercase string not in TYPE_MAP must NOT be treated as an enum."""
+    add_table("users")
+    msg = add_column("users", "col", "mytype")
+    assert msg.startswith("Error:")
+    # Must mention valid types, not hint at enum resolution
+    assert "mytype" in msg
+
+
+# ---------------------------------------------------------------------------
+# modify_column — type validation
+# ---------------------------------------------------------------------------
+
+
+def test_modify_column_invalid_type_returns_error() -> None:
+    """modify_column with invalid new_type must return an Error message."""
+    add_table("products")
+    add_column("products", "price", "int")
+    msg = modify_column("products", "price", new_type="not_a_type")
+    assert msg.startswith("Error:")
+    assert "not_a_type" in msg
+
+
+def test_modify_column_invalid_type_leaves_column_unchanged() -> None:
+    """Schema must not change when modify_column is called with an invalid type."""
+    add_table("products")
+    add_column("products", "price", "int")
+    modify_column("products", "price", new_type="bogus")
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "products")
+    col = next(c for c in tbl["columns"] if c["name"] == "price")
+    assert col["type"] == "int"
+
+
+def test_modify_column_valid_type_accepted() -> None:
+    """modify_column with a valid new_type must succeed."""
+    add_table("products")
+    add_column("products", "price", "int")
+    msg = modify_column("products", "price", new_type="decimal")
+    assert not msg.startswith("Error:"), f"Valid type 'decimal' was rejected: {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -599,3 +840,291 @@ def test_add_file_duplicate_returns_error(fresh_staging: Path) -> None:
     result = add_file("legacy.py")
     assert "Error" in result
     assert "already exist" in result
+
+
+# ---------------------------------------------------------------------------
+# Bug 13: add_column index parameter
+# ---------------------------------------------------------------------------
+
+
+def test_add_column_with_index_creates_index_entry() -> None:
+    """add_column(index=True) must append a non-unique Index to the table."""
+    add_table("events")
+    msg = add_column("events", "created_at", "datetime", index=True)
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "events")
+    indexes = tbl.get("indexes", [])
+    assert any(
+        idx["columns"] == ["created_at"] and not idx["unique"]
+        for idx in indexes
+    )
+
+
+def test_add_column_without_index_creates_no_index() -> None:
+    """add_column without index parameter must not create any index entry."""
+    add_table("events")
+    add_column("events", "created_at", "datetime")
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "events")
+    indexes = tbl.get("indexes", [])
+    # The auto-seeded id column has no index; no new index should be present
+    assert not any(idx["columns"] == ["created_at"] for idx in indexes)
+
+
+def test_add_column_index_false_creates_no_index() -> None:
+    """add_column(index=False) must not create an index."""
+    add_table("orders")
+    add_column("orders", "status", "string", index=False)
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "orders")
+    indexes = tbl.get("indexes", [])
+    assert not any(idx["columns"] == ["status"] for idx in indexes)
+
+
+def test_add_column_index_and_unique_both_work() -> None:
+    """index=True and unique=True are independent; index creates its own entry."""
+    add_table("users")
+    msg = add_column("users", "email", "string", unique=True, index=True)
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "users")
+    col = next(c for c in tbl["columns"] if c["name"] == "email")
+    assert col["unique"] is True
+    indexes = tbl.get("indexes", [])
+    assert any(idx["columns"] == ["email"] and not idx["unique"] for idx in indexes)
+
+
+# ---------------------------------------------------------------------------
+# Bug 13: modify_column primary_key parameter
+# ---------------------------------------------------------------------------
+
+
+def test_modify_column_set_primary_key_true() -> None:
+    """modify_column(primary_key=True) must flip the column's primary_key flag."""
+    add_table("items")
+    add_column("items", "slug", "string", primary_key=False)
+    msg = modify_column("items", "slug", primary_key=True)
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "items")
+    col = next(c for c in tbl["columns"] if c["name"] == "slug")
+    assert col["primary_key"] is True
+
+
+def test_modify_column_primary_key_true_forces_not_nullable() -> None:
+    """Setting primary_key=True must also set nullable=False."""
+    add_table("items")
+    add_column("items", "slug", "string", nullable=True, primary_key=False)
+    modify_column("items", "slug", primary_key=True)
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "items")
+    col = next(c for c in tbl["columns"] if c["name"] == "slug")
+    assert col["nullable"] is False
+
+
+def test_modify_column_set_primary_key_false() -> None:
+    """modify_column(primary_key=False) must demote the PK flag."""
+    add_table("items")
+    add_column("items", "slug", "string", primary_key=True)
+    msg = modify_column("items", "slug", primary_key=False)
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "items")
+    col = next(c for c in tbl["columns"] if c["name"] == "slug")
+    assert col["primary_key"] is False
+
+
+def test_modify_column_primary_key_none_leaves_unchanged() -> None:
+    """Omitting primary_key (None) must not change the existing value."""
+    add_table("items")
+    add_column("items", "code", "string", primary_key=False)
+    modify_column("items", "code", nullable=False)  # primary_key not passed
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "items")
+    col = next(c for c in tbl["columns"] if c["name"] == "code")
+    assert col["primary_key"] is False
+
+
+# ---------------------------------------------------------------------------
+# Bug 13: modify_column foreign_key parameter
+# ---------------------------------------------------------------------------
+
+
+def test_modify_column_add_foreign_key() -> None:
+    """modify_column(foreign_key=...) must set the FK and create a relation."""
+    add_table("users")
+    add_table("posts")
+    add_column("posts", "author_id", "uuid")
+    msg = modify_column("posts", "author_id", foreign_key="users.id")
+    assert "Error" not in msg
+    proposed = read_proposed()
+    # FK stored on column
+    tbl = next(t for t in proposed["tables"] if t["name"] == "posts")
+    col = next(c for c in tbl["columns"] if c["name"] == "author_id")
+    assert col.get("foreign_key") == "users.id"
+    # Relation entry created
+    assert any(
+        r.get("from") == "posts.author_id" and r.get("to") == "users.id"
+        for r in proposed["relations"]
+    )
+
+
+def test_modify_column_remove_foreign_key() -> None:
+    """modify_column(foreign_key=None) must clear the FK and remove the relation."""
+    add_table("users")
+    add_table("posts")
+    add_column("posts", "author_id", "uuid", foreign_key="users.id")
+    msg = modify_column("posts", "author_id", foreign_key=None)
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "posts")
+    col = next(c for c in tbl["columns"] if c["name"] == "author_id")
+    assert col.get("foreign_key") is None
+    # Relation must be gone
+    assert not any(
+        r.get("from") == "posts.author_id"
+        for r in proposed["relations"]
+    )
+
+
+def test_modify_column_fk_nonexistent_table_returns_error() -> None:
+    """modify_column with FK pointing at a missing table must return Error."""
+    add_table("posts")
+    add_column("posts", "author_id", "uuid")
+    msg = modify_column("posts", "author_id", foreign_key="ghost.id")
+    assert msg.startswith("Error:")
+    assert "ghost" in msg
+
+
+def test_modify_column_fk_nonexistent_column_returns_error() -> None:
+    """modify_column with FK pointing at a missing column must return Error."""
+    add_table("users")
+    add_table("posts")
+    add_column("posts", "author_id", "uuid")
+    msg = modify_column("posts", "author_id", foreign_key="users.nonexistent")
+    assert msg.startswith("Error:")
+
+
+def test_modify_column_fk_invalid_format_returns_error() -> None:
+    """modify_column with a malformed FK string must return Error."""
+    add_table("posts")
+    add_column("posts", "author_id", "uuid")
+    msg = modify_column("posts", "author_id", foreign_key="no_dot_here")
+    assert msg.startswith("Error:")
+
+
+def test_modify_column_replace_existing_foreign_key() -> None:
+    """modify_column with a new FK must replace the old relation, not add a second."""
+    add_table("users")
+    add_table("admins")
+    add_table("posts")
+    add_column("posts", "author_id", "uuid", foreign_key="users.id")
+    msg = modify_column("posts", "author_id", foreign_key="admins.id")
+    assert "Error" not in msg
+    proposed = read_proposed()
+    # Only one relation for posts.author_id
+    fk_rels = [
+        r for r in proposed["relations"]
+        if r.get("from") == "posts.author_id"
+    ]
+    assert len(fk_rels) == 1
+    assert fk_rels[0]["to"] == "admins.id"
+
+
+# ---------------------------------------------------------------------------
+# Bug 13: modify_column index parameter
+# ---------------------------------------------------------------------------
+
+
+def test_modify_column_add_index() -> None:
+    """modify_column(index=True) must create a non-unique index for the column."""
+    add_table("sensors")
+    add_column("sensors", "reading", "int")
+    msg = modify_column("sensors", "reading", index=True)
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "sensors")
+    assert any(
+        idx["columns"] == ["reading"] and not idx["unique"]
+        for idx in tbl.get("indexes", [])
+    )
+
+
+def test_modify_column_remove_index() -> None:
+    """modify_column(index=False) must drop the non-unique index for the column."""
+    add_table("sensors")
+    add_column("sensors", "reading", "int", index=True)
+    msg = modify_column("sensors", "reading", index=False)
+    assert "Error" not in msg
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "sensors")
+    assert not any(
+        idx["columns"] == ["reading"] and not idx["unique"]
+        for idx in tbl.get("indexes", [])
+    )
+
+
+def test_modify_column_add_index_idempotent() -> None:
+    """Calling modify_column(index=True) twice must not create duplicate indexes."""
+    add_table("sensors")
+    add_column("sensors", "reading", "int")
+    modify_column("sensors", "reading", index=True)
+    modify_column("sensors", "reading", index=True)
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "sensors")
+    matching = [
+        idx for idx in tbl.get("indexes", [])
+        if idx["columns"] == ["reading"] and not idx["unique"]
+    ]
+    assert len(matching) == 1
+
+
+def test_modify_column_index_none_leaves_unchanged() -> None:
+    """Omitting index (None) must not create or remove any indexes."""
+    add_table("sensors")
+    add_column("sensors", "reading", "int", index=True)
+    # Change a different property — index must remain untouched
+    modify_column("sensors", "reading", nullable=False)
+    proposed = read_proposed()
+    tbl = next(t for t in proposed["tables"] if t["name"] == "sensors")
+    assert any(
+        idx["columns"] == ["reading"] and not idx["unique"]
+        for idx in tbl.get("indexes", [])
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bug 15: MCP serverInfo must report alterdb version, not mcp SDK version
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_server_version_matches_alterdb_package() -> None:
+    """The MCP server must report the alterdb package version, not the mcp SDK version."""
+    from alter import __version__
+
+    reported = ms.mcp._real._mcp_server.version
+    assert reported == __version__, (
+        f"MCP serverInfo version '{reported}' does not match "
+        f"alterdb package version '{__version__}'"
+    )
+
+
+def test_mcp_server_version_is_not_mcp_sdk_version() -> None:
+    """The reported version must differ from the mcp SDK's own version."""
+    try:
+        from importlib.metadata import version as pkg_version
+        mcp_sdk_version = pkg_version("mcp")
+    except Exception:
+        pytest.skip("Cannot determine mcp SDK version")
+
+    reported = ms.mcp._real._mcp_server.version
+    assert reported != mcp_sdk_version, (
+        f"MCP server is still reporting the mcp SDK version ({mcp_sdk_version}) "
+        "instead of the alterdb package version"
+    )
+
+
+def test_mcp_server_name_is_alter() -> None:
+    """Sanity-check: the server name must remain 'Alter'."""
+    assert ms.mcp._real._mcp_server.name == "Alter"

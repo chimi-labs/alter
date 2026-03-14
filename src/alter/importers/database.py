@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from pathlib import Path
-
-from alter.schema import AlterSchema, Column, Position, Relation, Table
+from alter.schema import AlterSchema, Column, Relation, Table
 
 # Grid constants for auto-positioning imported tables
 _GRID_COLS = 3
@@ -60,16 +58,26 @@ _PG_TYPE_MAP: dict[str, str] = {
 }
 
 
-def import_from_database(connection_string: str) -> AlterSchema:
+def import_from_database(
+    connection_string: str,
+    schema: str = "public",
+) -> AlterSchema:
     """Introspect a live PostgreSQL database and return an ``AlterSchema``.
 
     Reads tables, columns, primary keys, unique constraints, foreign key
-    relations, and indexes from the ``public`` schema.
+    relations, and indexes from the specified PostgreSQL schema.
 
     Args:
         connection_string: A ``libpq``-compatible connection string, e.g.
             ``"postgresql://user:pass@localhost/mydb"`` or
             ``"host=localhost dbname=mydb user=myuser"``.
+        schema: PostgreSQL schema name to introspect.  Defaults to
+            ``"public"``.  Use a custom value for databases that place
+            tables in a non-default schema (e.g. ``"myapp"``,
+            ``"analytics"``).  Tables from a non-``public`` schema will
+            have ``schema_name`` set on the resulting ``Table`` objects so
+            that generated SQL uses the fully-qualified ``schema.table``
+            reference.
 
     Returns:
         An ``AlterSchema`` with grid-positioned tables and relations.
@@ -95,7 +103,7 @@ def import_from_database(connection_string: str) -> AlterSchema:
         ) from exc
 
     try:
-        return _introspect(conn)
+        return _introspect(conn, schema=schema)
     finally:
         conn.close()
 
@@ -105,8 +113,13 @@ def import_from_database(connection_string: str) -> AlterSchema:
 # ---------------------------------------------------------------------------
 
 
-def _introspect(conn: object) -> AlterSchema:
-    """Run all introspection queries and build the schema."""
+def _introspect(conn: object, schema: str = "public") -> AlterSchema:
+    """Run all introspection queries and build the schema.
+
+    Args:
+        conn:   An open psycopg2 connection.
+        schema: PostgreSQL schema name to inspect (default ``"public"``).
+    """
     cursor = conn.cursor()  # type: ignore[attr-defined]
 
     # ── Table names ─────────────────────────────────────────────────────────
@@ -114,10 +127,11 @@ def _introspect(conn: object) -> AlterSchema:
         """
         SELECT table_name
         FROM information_schema.tables
-        WHERE table_schema = 'public'
+        WHERE table_schema = %s
           AND table_type = 'BASE TABLE'
         ORDER BY table_name
-        """
+        """,
+        (schema,),
     )
     table_names: list[str] = [row[0] for row in cursor.fetchall()]
 
@@ -127,9 +141,10 @@ def _introspect(conn: object) -> AlterSchema:
         SELECT table_name, column_name, data_type, character_maximum_length,
                is_nullable, column_default, udt_name
         FROM information_schema.columns
-        WHERE table_schema = 'public'
+        WHERE table_schema = %s
         ORDER BY table_name, ordinal_position
-        """
+        """,
+        (schema,),
     )
     col_rows: dict[str, list] = defaultdict(list)
     for row in cursor.fetchall():
@@ -143,9 +158,10 @@ def _introspect(conn: object) -> AlterSchema:
         JOIN information_schema.key_column_usage kcu
           ON tc.constraint_name = kcu.constraint_name
          AND tc.table_schema   = kcu.table_schema
-        WHERE tc.table_schema   = 'public'
+        WHERE tc.table_schema   = %s
           AND tc.constraint_type = 'PRIMARY KEY'
-        """
+        """,
+        (schema,),
     )
     pk_cols: set[tuple[str, str]] = {(r[0], r[1]) for r in cursor.fetchall()}
 
@@ -157,9 +173,10 @@ def _introspect(conn: object) -> AlterSchema:
         JOIN information_schema.key_column_usage kcu
           ON tc.constraint_name = kcu.constraint_name
          AND tc.table_schema   = kcu.table_schema
-        WHERE tc.table_schema   = 'public'
+        WHERE tc.table_schema   = %s
           AND tc.constraint_type = 'UNIQUE'
-        """
+        """,
+        (schema,),
     )
     uq_cols: set[tuple[str, str]] = {(r[0], r[1]) for r in cursor.fetchall()}
 
@@ -179,10 +196,11 @@ def _introspect(conn: object) -> AlterSchema:
          AND ccu.table_schema    = tc.table_schema
         JOIN information_schema.referential_constraints  AS rc
           ON tc.constraint_name  = rc.constraint_name
-        WHERE tc.table_schema   = 'public'
+        WHERE tc.table_schema   = %s
           AND tc.constraint_type = 'FOREIGN KEY'
         ORDER BY tc.table_name, kcu.column_name
-        """
+        """,
+        (schema,),
     )
     fk_rows = cursor.fetchall()
 
@@ -198,8 +216,9 @@ def _introspect(conn: object) -> AlterSchema:
         """
         SELECT tablename, indexdef
         FROM pg_indexes
-        WHERE schemaname = 'public'
-        """
+        WHERE schemaname = %s
+        """,
+        (schema,),
     )
     index_cols: set[tuple[str, str]] = set()
     for tablename, indexdef in cursor.fetchall():
@@ -213,6 +232,10 @@ def _introspect(conn: object) -> AlterSchema:
                 index_cols.add((tablename, m.group(1)))
 
     # ── Build Table objects ──────────────────────────────────────────────────
+    # Tables from a non-public schema get schema_name set so generated SQL
+    # uses fully-qualified references (e.g. "myapp"."users").
+    set_schema_name = schema if schema != "public" else None
+
     tables: list[Table] = []
     for tname in table_names:
         cols: list[Column] = []
@@ -234,7 +257,13 @@ def _introspect(conn: object) -> AlterSchema:
             )
             cols.append(col)
 
-        tables.append(Table(name=tname, columns=cols))
+        tables.append(
+            Table(
+                name=tname,
+                columns=cols,
+                **{"schema_name": set_schema_name} if set_schema_name else {},
+            )
+        )
 
     # ── Build Relation objects ───────────────────────────────────────────────
     _valid_on_delete = {"CASCADE", "SET NULL", "RESTRICT", "NO ACTION", "SET DEFAULT"}

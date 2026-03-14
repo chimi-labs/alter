@@ -361,11 +361,126 @@ def test_detect_project_orm_empty_defaults_sqlmodel(tmp_path: Path) -> None:
 
 
 def test_detect_project_orm_both_raises(tmp_path: Path) -> None:
+    """Genuine conflict: both parsers find actual ORM table class definitions."""
     from alter.errors import ParseError
-    (tmp_path / "a.py").write_text("from sqlmodel import SQLModel\n")
-    (tmp_path / "b.py").write_text("from sqlalchemy import Column\n")
+    # SQLModel table definition (table=True marker)
+    (tmp_path / "a.py").write_text(
+        "from sqlmodel import SQLModel, Field\n"
+        "class User(SQLModel, table=True):\n"
+        "    __tablename__ = 'user'\n"
+        "    id: int\n"
+    )
+    # Pure SQLAlchemy table definition (__tablename__ without table=True)
+    (tmp_path / "b.py").write_text(
+        "from sqlalchemy import Column, Integer\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "class Base(DeclarativeBase): pass\n"
+        "class Widget(Base):\n"
+        "    __tablename__ = 'widget'\n"
+        "    id = Column(Integer, primary_key=True)\n"
+    )
     with pytest.raises(ParseError, match="(?i)both"):
         detect_project_orm(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# 6b. detect_project_orm() — SQLModel + SQLAlchemy co-existence (regression)
+# ---------------------------------------------------------------------------
+#
+# SQLModel is built on SQLAlchemy.  Many SQLModel projects legitimately import
+# from both (event listeners, custom Column types, advanced relationship
+# config).  detect_project_orm() must resolve these as "sqlmodel" rather than
+# raising a ParseError.
+# ---------------------------------------------------------------------------
+
+
+_SQLMODEL_TABLE = (
+    "from sqlmodel import SQLModel, Field\n"
+    "class User(SQLModel, table=True):\n"
+    "    __tablename__ = 'user'\n"
+    "    id: int = Field(primary_key=True)\n"
+)
+
+_SQLALCHEMY_UTILITY = (
+    "from sqlalchemy import event\n"
+    "def after_commit(session, *args): pass\n"
+)
+
+_SQLALCHEMY_COLUMN_IMPORT = (
+    "from sqlalchemy import Column, String\n"
+    "# Used alongside SQLModel for raw column types\n"
+)
+
+_SQLALCHEMY_ORM_IMPORT = (
+    "from sqlalchemy.orm import relationship\n"
+    "# Advanced relationship configuration\n"
+)
+
+
+def test_detect_orm_sqlmodel_with_sqlalchemy_event_import(tmp_path: Path) -> None:
+    """SQLModel project that also imports sqlalchemy.event → 'sqlmodel'."""
+    (tmp_path / "models.py").write_text(_SQLMODEL_TABLE)
+    (tmp_path / "events.py").write_text(_SQLALCHEMY_UTILITY)
+    assert detect_project_orm(tmp_path) == "sqlmodel"
+
+
+def test_detect_orm_sqlmodel_with_sqlalchemy_column_import(tmp_path: Path) -> None:
+    """SQLModel project with direct 'from sqlalchemy import Column' → 'sqlmodel'."""
+    (tmp_path / "models.py").write_text(_SQLMODEL_TABLE)
+    (tmp_path / "types.py").write_text(_SQLALCHEMY_COLUMN_IMPORT)
+    assert detect_project_orm(tmp_path) == "sqlmodel"
+
+
+def test_detect_orm_sqlmodel_with_sqlalchemy_orm_import(tmp_path: Path) -> None:
+    """SQLModel project with 'from sqlalchemy.orm import relationship' → 'sqlmodel'."""
+    (tmp_path / "models.py").write_text(_SQLMODEL_TABLE)
+    (tmp_path / "relations.py").write_text(_SQLALCHEMY_ORM_IMPORT)
+    assert detect_project_orm(tmp_path) == "sqlmodel"
+
+
+def test_detect_orm_sqlmodel_with_multiple_sqlalchemy_files(tmp_path: Path) -> None:
+    """Multiple sqlalchemy-importing utility files do not confuse detection."""
+    (tmp_path / "models.py").write_text(_SQLMODEL_TABLE)
+    (tmp_path / "events.py").write_text(_SQLALCHEMY_UTILITY)
+    (tmp_path / "types.py").write_text(_SQLALCHEMY_COLUMN_IMPORT)
+    (tmp_path / "relations.py").write_text(_SQLALCHEMY_ORM_IMPORT)
+    assert detect_project_orm(tmp_path) == "sqlmodel"
+
+
+def test_detect_orm_import_only_both_defaults_sqlmodel(tmp_path: Path) -> None:
+    """Only imports (no table definitions) from both → defaults to 'sqlmodel'."""
+    (tmp_path / "a.py").write_text("from sqlmodel import SQLModel\n")
+    (tmp_path / "b.py").write_text("from sqlalchemy import Column\n")
+    # Neither file defines actual table classes → no conflict, default sqlmodel
+    assert detect_project_orm(tmp_path) == "sqlmodel"
+
+
+def test_detect_orm_sqlalchemy_only_tables_no_sqlmodel_table(tmp_path: Path) -> None:
+    """SQLAlchemy-only table definitions with a SQLModel utility import → 'sqlalchemy'."""
+    # This file imports sqlmodel (e.g. for a mixin type) but defines no tables
+    (tmp_path / "mixin.py").write_text("from sqlmodel import SQLModel\n# type helper\n")
+    # This file defines a pure SQLAlchemy table
+    (tmp_path / "models.py").write_text(
+        "from sqlalchemy import Column, Integer\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "class Base(DeclarativeBase): pass\n"
+        "class Item(Base):\n"
+        "    __tablename__ = 'item'\n"
+        "    id = Column(Integer, primary_key=True)\n"
+    )
+    assert detect_project_orm(tmp_path) == "sqlalchemy"
+
+
+def test_detect_orm_sqlmodel_table_true_in_same_file_as_sqlalchemy_import(tmp_path: Path) -> None:
+    """A single file importing both and defining a SQLModel table → 'sqlmodel'."""
+    (tmp_path / "models.py").write_text(
+        "from sqlmodel import SQLModel, Field\n"
+        "from sqlalchemy import event\n"
+        "class User(SQLModel, table=True):\n"
+        "    __tablename__ = 'user'\n"
+        "    id: int = Field(primary_key=True)\n"
+    )
+    assert detect_project_orm(tmp_path) == "sqlmodel"
 
 
 # ---------------------------------------------------------------------------

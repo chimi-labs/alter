@@ -330,3 +330,289 @@ def test_enum_def_stores_values() -> None:
     assert isinstance(e.values[0], EnumMember)
     assert e.values[0].member_name == "active"
     assert e.values[0].value == "active"
+
+
+# ---------------------------------------------------------------------------
+# Bug 11: duplicate column names within a Table
+# ---------------------------------------------------------------------------
+
+
+class TestTableDuplicateColumnNames:
+    """Table._check_unique_columns must reject duplicate column names."""
+
+    def test_duplicate_column_names_raise(self) -> None:
+        """Two columns with the same name → ValidationError."""
+        with pytest.raises(ValidationError, match="Duplicate column names"):
+            Table(
+                name="users",
+                columns=[
+                    Column(name="id", type="uuid", primary_key=True),
+                    Column(name="id", type="string"),  # duplicate
+                ],
+            )
+
+    def test_error_message_includes_table_name(self) -> None:
+        """The error message names the offending table."""
+        with pytest.raises(ValidationError) as exc_info:
+            Table(
+                name="products",
+                columns=[
+                    Column(name="slug", type="string"),
+                    Column(name="slug", type="string"),
+                ],
+            )
+        assert "products" in str(exc_info.value)
+
+    def test_error_message_includes_duplicate_column_name(self) -> None:
+        """The error message lists the duplicate column name(s)."""
+        with pytest.raises(ValidationError) as exc_info:
+            Table(
+                name="orders",
+                columns=[
+                    Column(name="status", type="string"),
+                    Column(name="status", type="string"),
+                ],
+            )
+        assert "status" in str(exc_info.value)
+
+    def test_multiple_duplicates_all_reported(self) -> None:
+        """When two distinct names are each duplicated, both appear in the error."""
+        with pytest.raises(ValidationError) as exc_info:
+            Table(
+                name="items",
+                columns=[
+                    Column(name="foo", type="string"),
+                    Column(name="bar", type="string"),
+                    Column(name="foo", type="string"),
+                    Column(name="bar", type="string"),
+                ],
+            )
+        msg = str(exc_info.value)
+        assert "foo" in msg
+        assert "bar" in msg
+
+    def test_three_columns_one_repeated_raises(self) -> None:
+        """Three columns where one name is repeated → error."""
+        with pytest.raises(ValidationError, match="Duplicate column names"):
+            Table(
+                name="t",
+                columns=[
+                    Column(name="id", type="uuid", primary_key=True),
+                    Column(name="name", type="string"),
+                    Column(name="name", type="string"),  # duplicate
+                ],
+            )
+
+    def test_unique_column_names_pass(self) -> None:
+        """All distinct column names → no error."""
+        t = Table(
+            name="users",
+            columns=[
+                Column(name="id", type="uuid", primary_key=True),
+                Column(name="email", type="string"),
+                Column(name="created_at", type="datetime"),
+            ],
+        )
+        assert len(t.columns) == 3
+
+    def test_single_column_passes(self) -> None:
+        """A table with one column is always valid."""
+        t = Table(name="solo", columns=[Column(name="id", type="uuid", primary_key=True)])
+        assert len(t.columns) == 1
+
+    def test_empty_columns_passes(self) -> None:
+        """A table with no columns is valid (column-level uniqueness trivially holds)."""
+        t = Table(name="empty")
+        assert t.columns == []
+
+    def test_duplicate_via_json_raises(self) -> None:
+        """Duplicate columns supplied as raw JSON dict still raise ValidationError."""
+        data = {
+            **MINIMAL_VALID_JSON,
+            "tables": [
+                {
+                    "name": "things",
+                    "columns": [
+                        {"name": "id", "type": "uuid", "primary_key": True},
+                        {"name": "id", "type": "string"},
+                    ],
+                }
+            ],
+        }
+        with pytest.raises(ValidationError, match="Duplicate column names"):
+            AlterSchema.model_validate(data)
+
+    def test_load_file_with_duplicate_columns_raises_schema_file_error(
+        self, tmp_path: Path
+    ) -> None:
+        """AlterSchema.load() wraps the duplicate-column error in SchemaFileError."""
+        bad = {
+            **MINIMAL_VALID_JSON,
+            "tables": [
+                {
+                    "name": "broken",
+                    "columns": [
+                        {"name": "x", "type": "integer"},
+                        {"name": "x", "type": "integer"},
+                    ],
+                }
+            ],
+        }
+        bad_file = tmp_path / "bad.alter"
+        bad_file.write_text(json.dumps(bad))
+        with pytest.raises(SchemaFileError):
+            AlterSchema.load(bad_file)
+
+
+# ---------------------------------------------------------------------------
+# Bug 11: duplicate table names / relation names in AlterSchema
+# ---------------------------------------------------------------------------
+
+
+class TestAlterSchemaDuplicateTableNames:
+    """AlterSchema._check_uniqueness must reject duplicate table names (strict mode)."""
+
+    def _make_table(self, name: str) -> Table:
+        return Table(
+            name=name,
+            columns=[Column(name="id", type="uuid", primary_key=True, nullable=False)],
+        )
+
+    def test_duplicate_table_names_raise_in_strict_mode(self) -> None:
+        """Two tables with the same name → ValidationError in strict mode."""
+        with pytest.raises(ValidationError, match="Duplicate table names"):
+            AlterSchema(
+                orm="sqlmodel",
+                strict=True,
+                tables=[self._make_table("users"), self._make_table("users")],
+            )
+
+    def test_error_message_includes_duplicate_table_name(self) -> None:
+        """The error message names the duplicate table."""
+        with pytest.raises(ValidationError) as exc_info:
+            AlterSchema(
+                orm="sqlmodel",
+                tables=[self._make_table("orders"), self._make_table("orders")],
+            )
+        assert "orders" in str(exc_info.value)
+
+    def test_duplicate_table_names_allowed_in_non_strict_mode(self) -> None:
+        """strict=False bypasses the uniqueness check (used by incremental parsers)."""
+        schema = AlterSchema(
+            orm="sqlmodel",
+            strict=False,
+            tables=[self._make_table("users"), self._make_table("users")],
+        )
+        assert len(schema.tables) == 2
+
+    def test_unique_table_names_pass(self) -> None:
+        """Two distinct table names → no error."""
+        schema = AlterSchema(
+            orm="sqlmodel",
+            tables=[self._make_table("users"), self._make_table("posts")],
+        )
+        assert len(schema.tables) == 2
+
+    def test_three_tables_one_duplicate_raises(self) -> None:
+        """Three tables where two share a name → error."""
+        with pytest.raises(ValidationError, match="Duplicate table names"):
+            AlterSchema(
+                orm="sqlmodel",
+                tables=[
+                    self._make_table("a"),
+                    self._make_table("b"),
+                    self._make_table("a"),
+                ],
+            )
+
+
+class TestAlterSchemaDuplicateRelationNames:
+    """AlterSchema._check_uniqueness must reject duplicate relation names (strict mode)."""
+
+    def _make_table(self, name: str) -> Table:
+        return Table(
+            name=name,
+            columns=[Column(name="id", type="uuid", primary_key=True, nullable=False)],
+        )
+
+    def _make_relation(self, name: str) -> Relation:
+        return Relation(
+            name=name,
+            from_table="posts",
+            from_column="author_id",
+            to_table="users",
+            to_column="id",
+            type="many-to-one",
+            on_delete="CASCADE",
+        )
+
+    def test_duplicate_relation_names_raise_in_strict_mode(self) -> None:
+        """Two relations with the same name → ValidationError in strict mode."""
+        with pytest.raises(ValidationError, match="Duplicate relation names"):
+            AlterSchema(
+                orm="sqlmodel",
+                tables=[self._make_table("users"), self._make_table("posts")],
+                relations=[
+                    self._make_relation("fk_posts_author"),
+                    self._make_relation("fk_posts_author"),
+                ],
+            )
+
+    def test_error_message_includes_duplicate_relation_name(self) -> None:
+        """The error message names the duplicate relation."""
+        with pytest.raises(ValidationError) as exc_info:
+            AlterSchema(
+                orm="sqlmodel",
+                tables=[self._make_table("users"), self._make_table("posts")],
+                relations=[
+                    self._make_relation("rel_dup"),
+                    self._make_relation("rel_dup"),
+                ],
+            )
+        assert "rel_dup" in str(exc_info.value)
+
+    def test_duplicate_relation_names_allowed_in_non_strict_mode(self) -> None:
+        """strict=False bypasses the relation uniqueness check."""
+        schema = AlterSchema(
+            orm="sqlmodel",
+            strict=False,
+            tables=[self._make_table("users"), self._make_table("posts")],
+            relations=[
+                self._make_relation("fk_dup"),
+                self._make_relation("fk_dup"),
+            ],
+        )
+        assert len(schema.relations) == 2
+
+    def test_unique_relation_names_pass(self) -> None:
+        """Distinct relation names → no error."""
+        schema = AlterSchema(
+            orm="sqlmodel",
+            tables=[self._make_table("users"), self._make_table("posts")],
+            relations=[
+                self._make_relation("fk_author"),
+                Relation(
+                    name="fk_editor",
+                    from_table="posts",
+                    from_column="author_id",
+                    to_table="users",
+                    to_column="id",
+                    type="many-to-one",
+                    on_delete="CASCADE",
+                ),
+            ],
+        )
+        assert len(schema.relations) == 2
+
+    def test_duplicate_table_and_relation_names_both_reported(self) -> None:
+        """Having both a duplicate table name and a duplicate relation name
+        triggers a validation error (at least one of them)."""
+        with pytest.raises(ValidationError):
+            AlterSchema(
+                orm="sqlmodel",
+                tables=[self._make_table("users"), self._make_table("users")],
+                relations=[
+                    self._make_relation("fk_dup"),
+                    self._make_relation("fk_dup"),
+                ],
+            )

@@ -86,16 +86,19 @@ def test_table_with_pk_no_pk_warning():
 
 
 def test_duplicate_column_name_is_error():
-    table = Table(
-        name="users",
-        columns=[
-            Column(name="id", type="uuid", primary_key=True, nullable=False),
-            Column(name="id", type="string"),  # duplicate!
-        ],
-    )
-    schema = AlterSchema(tables=[table])
-    errors = _issues(schema, "error")
-    assert any("duplicate" in i.message.lower() for i in errors)
+    # Duplicate column names are now caught at Table construction time by the
+    # _check_unique_columns model validator, so a ValidationError is raised
+    # before validate_schema() is ever called.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="Duplicate column names"):
+        Table(
+            name="users",
+            columns=[
+                Column(name="id", type="uuid", primary_key=True, nullable=False),
+                Column(name="id", type="string"),  # duplicate!
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------

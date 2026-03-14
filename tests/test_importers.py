@@ -8,7 +8,7 @@ import pytest
 
 from alter.importers.alter_file import import_alter_file
 from alter.importers.sql import import_sql, ImportResult
-from alter.schema import AlterSchema, Column, Position, Table
+from alter.schema import AlterSchema, Column, Position, Relation, Table
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +310,177 @@ class TestImportAlterFile:
         loaded = import_alter_file(path)
         assert len(loaded.relations) == 1
         assert loaded.relations[0].from_table == "posts"
+
+
+# ---------------------------------------------------------------------------
+# Bug 16: import_sql file_path parameter
+# ---------------------------------------------------------------------------
+
+_BUG16_SQL = """
+CREATE TABLE sensors (
+    id SERIAL PRIMARY KEY,
+    reading SMALLINT NOT NULL
+);
+"""
+
+
+class TestImportSqlFilePath:
+    def test_default_file_path_is_app_models(self):
+        """Without file_path argument, tables default to 'app/models.py'."""
+        schema = import_sql(_BUG16_SQL).schema
+        assert schema.tables[0].file_path == "app/models.py"
+
+    def test_custom_file_path_applied_to_all_tables(self):
+        """All imported tables receive the supplied file_path."""
+        schema = import_sql(_MULTI_TABLE_SQL, file_path="src/myapp/models.py").schema
+        for tbl in schema.tables:
+            assert tbl.file_path == "src/myapp/models.py", (
+                f"Table '{tbl.name}' has wrong file_path: {tbl.file_path!r}"
+            )
+
+    def test_custom_file_path_single_table(self):
+        """file_path is applied correctly when only one table is imported."""
+        schema = import_sql(_BUG16_SQL, file_path="models/sensor.py").schema
+        assert schema.tables[0].file_path == "models/sensor.py"
+
+    def test_file_path_does_not_affect_table_name(self):
+        """Supplying file_path must not alter the parsed table name."""
+        schema = import_sql(_BUG16_SQL, file_path="other/path.py").schema
+        assert schema.tables[0].name == "sensors"
+
+    def test_file_path_does_not_affect_column_types(self):
+        """Supplying file_path must not affect column parsing."""
+        schema = import_sql(_BUG16_SQL, file_path="x/y.py").schema
+        tbl = schema.tables[0]
+        reading = next(c for c in tbl.columns if c.name == "reading")
+        assert reading.type == "int"
+
+    def test_orm_and_file_path_can_be_combined(self):
+        """file_path and orm can both be supplied independently."""
+        result = import_sql(_BUG16_SQL, orm="sqlalchemy", file_path="app/db.py")
+        assert result.schema.orm == "sqlalchemy"
+        assert result.schema.tables[0].file_path == "app/db.py"
+
+
+class TestImportSqlCLIFilePath:
+    """CLI alter import must pass the schema's sqlmodel_module as file_path."""
+
+    _MODELS_SQL = """
+    CREATE TABLE orders (
+        id SERIAL PRIMARY KEY,
+        total INTEGER NOT NULL
+    );
+    """
+
+    def test_cli_import_uses_metadata_sqlmodel_module(self, tmp_path: Path) -> None:
+        """alter import uses schema.metadata.sqlmodel_module as file_path."""
+        from click.testing import CliRunner
+        from alter.cli import main
+        from alter.schema import AlterSchema, SchemaMetadata
+
+        # Seed a schema with a non-default sqlmodel_module
+        alter_path = tmp_path / "schema.alter"
+        schema = AlterSchema(
+            metadata=SchemaMetadata(sqlmodel_module="src/myapp/models.py")
+        )
+        schema.save(alter_path)
+
+        sql_file = tmp_path / "schema.sql"
+        sql_file.write_text(self._MODELS_SQL)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["import", str(sql_file), "--file", str(alter_path)],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+
+        loaded = AlterSchema.load(alter_path)
+        orders = next(t for t in loaded.tables if t.name == "orders")
+        assert orders.file_path == "src/myapp/models.py"
+
+    def test_cli_import_default_file_path_when_metadata_is_default(
+        self, tmp_path: Path
+    ) -> None:
+        """When metadata is at its default value, tables get 'app/models.py'."""
+        from click.testing import CliRunner
+        from alter.cli import main
+        from alter.schema import AlterSchema
+
+        alter_path = tmp_path / "schema.alter"
+        AlterSchema().save(alter_path)
+
+        sql_file = tmp_path / "schema.sql"
+        sql_file.write_text(self._MODELS_SQL)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["import", str(sql_file), "--file", str(alter_path)],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+
+        loaded = AlterSchema.load(alter_path)
+        orders = next(t for t in loaded.tables if t.name == "orders")
+        assert orders.file_path == "app/models.py"
+
+
+class TestImportSqlMCPFilePath:
+    """MCP import_schema tool must pass the schema's sqlmodel_module as file_path."""
+
+    _SENSORS_SQL = """
+    CREATE TABLE readings (
+        id SERIAL PRIMARY KEY,
+        value INTEGER NOT NULL
+    );
+    """
+
+    def test_mcp_import_uses_metadata_sqlmodel_module(self, tmp_path: Path) -> None:
+        """import_schema MCP tool uses schema.metadata.sqlmodel_module as file_path."""
+        import alter.mcp_server as ms
+        from alter.mcp_server import import_schema
+        from alter.schema import AlterSchema, SchemaMetadata
+
+        alter_path = tmp_path / "schema.alter"
+        schema = AlterSchema(
+            metadata=SchemaMetadata(sqlmodel_module="services/data/models.py")
+        )
+        schema.save(alter_path)
+        ms.init_mcp(alter_path)
+
+        sql_file = tmp_path / "ddl.sql"
+        sql_file.write_text(self._SENSORS_SQL)
+
+        msg = import_schema(str(sql_file))
+        assert "Error" not in msg
+
+        from alter.mcp_server import commit_changes
+        commit_changes()
+
+        loaded = AlterSchema.load(alter_path)
+        reading = next(t for t in loaded.tables if t.name == "readings")
+        assert reading.file_path == "services/data/models.py"
+
+    def test_mcp_import_inline_sql_uses_metadata_module(self, tmp_path: Path) -> None:
+        """import_schema with raw SQL text (not a file path) also uses metadata."""
+        import alter.mcp_server as ms
+        from alter.mcp_server import import_schema, commit_changes
+        from alter.schema import AlterSchema, SchemaMetadata
+
+        alter_path = tmp_path / "schema.alter"
+        schema = AlterSchema(
+            metadata=SchemaMetadata(sqlmodel_module="app/v2/models.py")
+        )
+        schema.save(alter_path)
+        ms.init_mcp(alter_path)
+
+        msg = import_schema(self._SENSORS_SQL)
+        assert "Error" not in msg
+
+        commit_changes()
+
+        loaded = AlterSchema.load(alter_path)
+        reading = next(t for t in loaded.tables if t.name == "readings")
+        assert reading.file_path == "app/v2/models.py"

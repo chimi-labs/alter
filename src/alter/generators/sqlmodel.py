@@ -12,22 +12,18 @@ Supports three modes:
 from __future__ import annotations
 
 import ast
-import keyword
 
 from alter.generators._surgical import surgical_update_class, surgical_update_enum_class
-from pathlib import Path
 
 from alter.generators.base import (
     BaseGenerator,
     _class_name,
     _collect_stdlib_imports,
-    _default_model_path,
-    _imported_names,
     _safe_member_name,
     generate_enum_class,
 )
 from alter.schema import AlterSchema, Column, EnumDef, Table
-from alter.types import alter_to_python, is_enum_type
+from alter.types import alter_to_python
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
-from alter.diff import SchemaChange, diff_schemas
 from alter.exporters.sql import export_sql
 from alter.importers.sql import import_sql
 
@@ -171,16 +170,18 @@ def _migration_sql(staging: StagingManager) -> str:
     if not changes:
         return ""
 
-    cur = staging.current_schema
     prop = staging.proposed_schema
     lines: list[str] = []
 
     from alter.types import alter_to_sql
     from alter.exporters.sql import _column_to_sql, _table_to_sql
-    from alter.schema import Relation as Rel
-
-    cur_tables = {t.name: t for t in cur.tables}
     prop_tables = {t.name: t for t in prop.tables}
+
+    # Tables being dropped in this migration batch.  DROP TABLE implicitly
+    # removes all columns, indexes, and constraints on the table, so any
+    # ALTER TABLE / DROP INDEX statements targeting a dropped table are not
+    # only redundant but would raise a runtime error.
+    dropped_tables: set[str] = {ch.table for ch in changes if ch.type == "drop_table" and ch.table}
 
     for ch in changes:
         if ch.type == "add_table":
@@ -204,12 +205,13 @@ def _migration_sql(staging: StagingManager) -> str:
                     lines.append(f"ALTER TABLE {ch.table} ADD COLUMN {col_sql};\n")
 
         elif ch.type == "drop_column":
-            lines.append(f"ALTER TABLE {ch.table} DROP COLUMN {ch.column};\n")
+            if ch.table not in dropped_tables:
+                lines.append(f"ALTER TABLE {ch.table} DROP COLUMN {ch.column};\n")
 
         elif ch.type == "modify_column":
             from alter.exporters.sql import _format_default
             tbl = prop_tables.get(ch.table)
-            if tbl and ch.column:
+            if tbl and ch.column and ch.table not in dropped_tables:
                 col = next((c for c in tbl.columns if c.name == ch.column), None)
                 if col:
                     t, c = ch.table, ch.column
@@ -269,7 +271,10 @@ def _migration_sql(staging: StagingManager) -> str:
 
         elif ch.type == "drop_relation":
             to_str = ch.details.get("to", "")
-            if ch.table and ch.column:
+            # Skip: DROP TABLE already removes all FK constraints on the table.
+            # Emitting ALTER TABLE … DROP CONSTRAINT after DROP TABLE would
+            # raise a runtime error because the table no longer exists.
+            if ch.table and ch.column and ch.table not in dropped_tables:
                 to_table = to_str.split(".", 1)[0] if "." in to_str else ""
                 constraint = (
                     f"fk_{ch.table}_{ch.column}_{to_table}"
@@ -293,7 +298,7 @@ def _migration_sql(staging: StagingManager) -> str:
                 )
 
         elif ch.type == "drop_index":
-            if ch.table and ch.column:
+            if ch.table and ch.column and ch.table not in dropped_tables:
                 lines.append(
                     f"DROP INDEX IF EXISTS idx_{ch.table}_{ch.column};\n"
                 )
@@ -366,6 +371,25 @@ class _Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         pass  # suppress default noisy logging
+
+    # ── CORS ─────────────────────────────────────────────────────────────────
+
+    def _send_cors_headers(self) -> None:
+        """Append CORS headers so cross-origin clients can access the API.
+
+        The server already binds to 127.0.0.1 only, so ``*`` is safe here —
+        it allows the canvas UI (which may be served from a different local
+        port during development) and browser extensions to reach the API.
+        """
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        """Handle CORS preflight requests."""
+        self.send_response(200)
+        self._send_cors_headers()
+        self.end_headers()
 
     # ── Routing ─────────────────────────────────────────────────────────────
 
@@ -478,6 +502,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
+        self._send_cors_headers()
         self.end_headers()
 
         try:
@@ -810,6 +835,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(body)
 

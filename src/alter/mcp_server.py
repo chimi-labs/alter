@@ -42,10 +42,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from alter.diff import diff_schemas
 from alter.errors import AlterError
-from alter.schema import AlterSchema, Column, EnumDef, Relation, Table
+from alter.schema import AlterSchema, Column, Index, Relation, Table
 from alter.staging import StagingManager
+from alter.types import TYPE_MAP, is_enum_type
 from alter.validate import validate_schema
 
 # Sentinel for "parameter not supplied" — distinct from None so callers can
@@ -129,7 +129,10 @@ def init_mcp(alter_file_path: Path) -> None:
     _path = alter_file_path
     _staging = StagingManager(alter_file_path)
     from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
-    mcp._init_real(FastMCP("Alter"))
+    from alter import __version__  # noqa: PLC0415
+    real_mcp = FastMCP("Alter")
+    real_mcp._mcp_server.version = __version__
+    mcp._init_real(real_mcp)
 
 
 def _get_staging() -> StagingManager:
@@ -171,6 +174,10 @@ def _schema_summary(schema: AlterSchema) -> dict[str, Any]:
                     }
                     for c in t.columns
                 ],
+                "indexes": [
+                    {"columns": idx.columns, "unique": idx.unique}
+                    for idx in t.indexes
+                ],
             }
             for t in schema.tables
         ],
@@ -185,6 +192,34 @@ def _schema_summary(schema: AlterSchema) -> dict[str, Any]:
             for r in schema.relations
         ],
     }
+
+
+def _validate_column_type(col_type: str, schema: AlterSchema) -> str | None:
+    """Validate *col_type* against built-in types and schema enums.
+
+    Returns ``None`` when the type is valid.  Returns a human-readable error
+    string when the type is invalid so callers can surface it as a tool error.
+
+    Valid types are:
+    * Any key in ``TYPE_MAP`` (e.g. ``"string"``, ``"int"``, ``"uuid"``).
+    * A PascalCase enum name that matches an ``EnumDef`` defined in *schema*.
+    """
+    if col_type in TYPE_MAP:
+        return None
+    if is_enum_type(col_type):
+        enum_names = {e.name for e in schema.enums}
+        if col_type in enum_names:
+            return None
+        if enum_names:
+            return (
+                f"Unknown enum type '{col_type}'. "
+                f"Defined enums: {', '.join(sorted(enum_names))}"
+            )
+        return (
+            f"Unknown enum type '{col_type}'. No enums are defined in the schema."
+        )
+    valid = ", ".join(sorted(TYPE_MAP.keys()))
+    return f"Invalid column type '{col_type}'. Valid types: {valid}"
 
 
 def _diff_markdown_text(staging: StagingManager) -> str:
@@ -361,11 +396,16 @@ def read_proposed() -> dict[str, Any]:
 
 
 @mcp.tool()
-def add_table(name: str, file_path: str | None = None) -> str:
+def add_table(
+    name: str,
+    file_path: str | None = None,
+    columns: list[dict] | None = None,
+) -> str:
     """Add a new table to the proposed schema.
 
-    A default ``id uuid PRIMARY KEY`` column is seeded automatically.
-    Use ``add_column`` to add further columns.
+    When ``columns`` is omitted a default ``id uuid PRIMARY KEY`` column is
+    seeded automatically.  Use ``add_column`` to add further columns
+    afterwards, or pass ``columns`` to define the full set up front.
 
     Args:
         name:      Table name (snake_case).
@@ -373,6 +413,25 @@ def add_table(name: str, file_path: str | None = None) -> str:
                    path is inferred from existing tables in the schema at
                    apply time — new tables land in the same directory as
                    the majority of existing tables.
+        columns:   Optional list of column definitions.  Each element is a
+                   dict with keys:
+
+                     * ``name`` (required) — column name.
+                     * ``type`` (required) — alter type: uuid, string, text,
+                       int, bigint, float, decimal, bool, datetime, date,
+                       time, json, bytes.
+                     * ``primary_key`` (bool, default False)
+                     * ``nullable``    (bool, default True, forced False when
+                       primary_key is True)
+                     * ``unique``      (bool, default False)
+                     * ``default``     (str | None) — literal or keyword
+                       (uuid4, now, utcnow, true, false, …)
+                     * ``max_length``  (int | None)
+                     * ``foreign_key`` (str | None) — ``"table.column"``
+                     * ``index``       (bool, default False)
+
+                   When omitted or empty, the single default id column is
+                   seeded as described above.
     """
     staging = _get_staging()
 
@@ -381,15 +440,101 @@ def add_table(name: str, file_path: str | None = None) -> str:
         if any(t.name == name for t in s.tables):
             raise ValueError(f"Table '{name}' already exists")
         tbl = Table(name=name, **{"file_path": file_path} if file_path else {})
-        tbl.columns.append(
-            Column(name="id", type="uuid", primary_key=True, nullable=False, default="uuid4")
-        )
+
+        if not columns:
+            # Default behaviour: seed a single uuid PK column.
+            tbl.columns.append(
+                Column(name="id", type="uuid", primary_key=True, nullable=False, default="uuid4")
+            )
+        else:
+            new_relations: list[Relation] = []
+            for col_spec in columns:
+                col_name = col_spec.get("name")
+                col_type = col_spec.get("type")
+                if not col_name:
+                    raise ValueError("Each column must have a 'name' field.")
+                if not col_type:
+                    raise ValueError(f"Column '{col_name}' must have a 'type' field.")
+
+                # Validate column type.
+                type_err = _validate_column_type(col_type, s)
+                if type_err:
+                    raise ValueError(type_err)
+
+                col_primary_key = bool(col_spec.get("primary_key", False))
+                # Respect explicit nullable; default True unless it's a PK.
+                nullable_raw = col_spec.get("nullable")
+                if col_primary_key:
+                    col_nullable = False
+                elif nullable_raw is None:
+                    col_nullable = True
+                else:
+                    col_nullable = bool(nullable_raw)
+
+                col_unique = bool(col_spec.get("unique", False))
+                col_default = col_spec.get("default") or None
+                col_max_length_raw = col_spec.get("max_length")
+                col_max_length = int(col_max_length_raw) if col_max_length_raw is not None else None
+                col_foreign_key = col_spec.get("foreign_key") or None
+                col_index = bool(col_spec.get("index", False))
+
+                # Validate FK target before touching the schema.
+                relation: Relation | None = None
+                if col_foreign_key:
+                    parts = col_foreign_key.rsplit(".", 1)
+                    if len(parts) != 2:
+                        raise ValueError(
+                            f"Invalid foreign_key format '{col_foreign_key}': "
+                            "expected 'table.column'."
+                        )
+                    to_table_raw, to_column = parts
+                    to_table = to_table_raw.rsplit(".", 1)[-1]  # strip optional schema prefix
+                    target_tbl = next((t for t in s.tables if t.name == to_table), None)
+                    if target_tbl is None:
+                        raise ValueError(
+                            f"FK target table '{to_table}' does not exist in schema."
+                        )
+                    if to_column not in {c.name for c in target_tbl.columns}:
+                        raise ValueError(
+                            f"FK target column '{to_table}.{to_column}' does not exist in schema."
+                        )
+                    relation = Relation(
+                        name=f"{name}_{col_name}_fkey",
+                        from_table=name,
+                        from_column=col_name,
+                        to_table=to_table,
+                        to_column=to_column,
+                        type="many-to-one",
+                        on_delete="CASCADE",
+                    )
+
+                tbl.columns.append(
+                    Column(
+                        name=col_name,
+                        type=col_type,
+                        nullable=col_nullable,
+                        unique=col_unique,
+                        primary_key=col_primary_key,
+                        default=col_default,
+                        max_length=col_max_length,
+                        foreign_key=col_foreign_key,
+                    )
+                )
+                if col_index:
+                    tbl.indexes.append(Index(columns=[col_name], unique=False))
+                if relation is not None:
+                    new_relations.append(relation)
+
+            s.relations.extend(new_relations)
+
         s.tables.append(tbl)
         return s
 
     try:
         staging.propose(apply)
-        return f"Added table '{name}' with default id column."
+        if not columns:
+            return f"Added table '{name}' with default id column."
+        return f"Added table '{name}' with {len(columns)} column(s)."
     except (AlterError, ValueError) as exc:
         return f"Error: {exc}"
 
@@ -470,6 +615,7 @@ def add_column(
     default: str | None = None,
     max_length: int | None = None,
     foreign_key: str | None = None,
+    index: bool = False,
 ) -> str:
     """Add a column to a table in the proposed schema.
 
@@ -484,6 +630,7 @@ def add_column(
         default:     Default value: uuid4, now, true, false, or a literal.
         max_length:  For string columns — max character length.
         foreign_key: FK reference in 'table.column' format (optional).
+        index:       Create a non-unique index on this column (default False).
     """
     staging = _get_staging()
 
@@ -494,6 +641,11 @@ def add_column(
             raise ValueError(f"Table '{table}' not found")
         if any(c.name == name for c in tbl.columns):
             raise ValueError(f"Column '{name}' already exists in '{table}'")
+
+        # Validate column type before touching the schema.
+        type_err = _validate_column_type(type, s)
+        if type_err:
+            raise ValueError(type_err)
 
         # Validate FK target BEFORE touching the schema so a bad FK never
         # leaves a partial column or a dangling relation behind.
@@ -540,6 +692,8 @@ def add_column(
         )
         if relation is not None:
             s.relations.append(relation)
+        if index:
+            tbl.indexes.append(Index(columns=[name], unique=False))
         return s
 
     try:
@@ -559,12 +713,17 @@ def modify_column(
     unique: bool | None = None,
     default: str | None = _UNSET,
     max_length: int | None = _UNSET,
+    primary_key: bool | None = None,
+    foreign_key: str | None = _UNSET,
+    index: bool | None = None,
 ) -> str:
     """Modify properties of an existing column in the proposed schema.
 
     Only the provided fields are changed; omit a field to leave it unchanged.
     Pass ``default=None`` to remove an existing default value entirely.
     Pass ``max_length=None`` to remove an existing max_length value entirely.
+    Pass ``foreign_key=None`` to remove an existing foreign key reference.
+    Pass ``index=True`` to create a non-unique index; ``index=False`` to drop it.
     """
     staging = _get_staging()
 
@@ -579,6 +738,9 @@ def modify_column(
         if new_name is not None:
             col.name = new_name
         if new_type is not None:
+            type_err = _validate_column_type(new_type, s)
+            if type_err:
+                raise ValueError(type_err)
             col.type = new_type
         if nullable is not None:
             col.nullable = nullable
@@ -588,6 +750,69 @@ def modify_column(
             col.default = default
         if max_length is not _UNSET:
             col.max_length = max_length
+        if primary_key is not None:
+            col.primary_key = primary_key
+            # A primary key column must be non-nullable.
+            if primary_key:
+                col.nullable = False
+        if foreign_key is not _UNSET:
+            # Validate and register the new FK, or clear the existing one.
+            if foreign_key is not None:
+                parts = foreign_key.rsplit(".", 1)
+                if len(parts) != 2:
+                    raise ValueError(
+                        f"Invalid foreign_key format '{foreign_key}': "
+                        "expected 'table.column'."
+                    )
+                to_table_raw, to_col_name = parts
+                to_table = to_table_raw.rsplit(".", 1)[-1]
+                target_tbl = next((t for t in s.tables if t.name == to_table), None)
+                if target_tbl is None:
+                    raise ValueError(
+                        f"FK target table '{to_table}' does not exist in schema."
+                    )
+                if to_col_name not in {c.name for c in target_tbl.columns}:
+                    raise ValueError(
+                        f"FK target column '{to_table}.{to_col_name}' "
+                        "does not exist in schema."
+                    )
+                # Remove any existing relation for this column before adding the new one.
+                s.relations = [
+                    r for r in s.relations
+                    if not (r.from_table == table and r.from_column == column)
+                ]
+                s.relations.append(Relation(
+                    name=f"{table}_{column}_fkey",
+                    from_table=table,
+                    from_column=column,
+                    to_table=to_table,
+                    to_column=to_col_name,
+                    type="many-to-one",
+                    on_delete="CASCADE",
+                ))
+            else:
+                # foreign_key=None → remove the FK and its relation entry.
+                s.relations = [
+                    r for r in s.relations
+                    if not (r.from_table == table and r.from_column == column)
+                ]
+            col.foreign_key = foreign_key
+        if index is not None:
+            col_name = new_name if new_name is not None else column
+            if index:
+                # Add a non-unique index if one doesn't already exist for this column.
+                already = any(
+                    idx.columns == [col_name] and not idx.unique
+                    for idx in tbl.indexes
+                )
+                if not already:
+                    tbl.indexes.append(Index(columns=[col_name], unique=False))
+            else:
+                # Remove any non-unique single-column index for this column.
+                tbl.indexes = [
+                    idx for idx in tbl.indexes
+                    if not (idx.columns == [col_name] and not idx.unique)
+                ]
         return s
 
     try:
@@ -890,7 +1115,7 @@ def apply_to_code(preview: bool = False) -> str:
     project_root = _get_path().parent
     try:
         return _apply_to_code_impl(staging, project_root, preview=preview)
-    except (AlterError, Exception) as exc:
+    except Exception as exc:
         return f"Error: {exc}"
 
 
@@ -904,7 +1129,7 @@ def sync_from_code() -> str:
     project_root = _get_path().parent
     try:
         return _sync_from_code_impl(staging, project_root)
-    except (AlterError, Exception) as exc:
+    except Exception as exc:
         return f"Error: {exc}"
 
 
@@ -940,11 +1165,15 @@ def import_schema(source: str, format: str = "sql") -> str:
             # Accept a file path or raw SQL text
             src_path = Path(source)
             sql_text = src_path.read_text() if src_path.exists() else source
-            sql_result = import_sql(sql_text, orm=staging.current_schema.orm)
+            sql_result = import_sql(
+                sql_text,
+                orm=staging.current_schema.orm,
+                file_path=staging.current_schema.metadata.sqlmodel_module,
+            )
             imported = sql_result.schema
             import_warnings = sql_result.warnings
 
-    except (AlterError, Exception) as exc:
+    except Exception as exc:
         return f"Error importing schema: {exc}"
 
     def apply(schema: AlterSchema) -> AlterSchema:
@@ -996,7 +1225,7 @@ def export_schema(format: str = "sql", proposed: bool = False) -> str:
         else:
             from alter.exporters.sql import export_sql  # noqa: PLC0415
             return export_sql(schema)
-    except (AlterError, Exception) as exc:
+    except Exception as exc:
         return f"Error exporting schema: {exc}"
 
 
@@ -1010,7 +1239,10 @@ def diff_markdown() -> str:
 
 
 @mcp.tool()
-def introspect_db(connection_string: str | None = None) -> str:
+def introspect_db(
+    connection_string: str | None = None,
+    schema: str = "public",
+) -> str:
     """Import the schema from a live PostgreSQL database into the proposed schema.
 
     Tables already present are skipped.
@@ -1018,6 +1250,9 @@ def introspect_db(connection_string: str | None = None) -> str:
     Args:
         connection_string: A libpq connection string or URL.  Defaults to the
             ``DATABASE_URL`` environment variable if not provided.
+        schema: PostgreSQL schema name to introspect.  Defaults to
+            ``"public"``.  Set this when your tables live in a custom
+            schema (e.g. ``"myapp"``, ``"analytics"``).
     """
     cs = connection_string or os.environ.get("DATABASE_URL")
     if not cs:
@@ -1029,8 +1264,8 @@ def introspect_db(connection_string: str | None = None) -> str:
     try:
         from alter.importers.database import import_from_database  # noqa: PLC0415
 
-        imported = import_from_database(cs)
-    except (ImportError, RuntimeError, Exception) as exc:
+        imported = import_from_database(cs, schema=schema)
+    except Exception as exc:
         return f"Error introspecting database: {exc}"
 
     staging = _get_staging()
