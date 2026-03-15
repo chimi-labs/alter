@@ -280,14 +280,36 @@ _DEFAULT_FACTORY_EQUIV: dict[str, str] = {
     # modern lambda form.  Treat both as semantically identical so existing
     # hand-written code is never touched unless the field actually changes.
     #
-    # NOTE: the canonical form uses the exact string produced by ast.unparse(),
-    # which inserts a space between "lambda" and ":" (i.e. "lambda :").
-    "datetime.utcnow": "lambda : datetime.now(timezone.utc)",
+    # NOTE: ast.unparse() output for zero-argument lambdas varies by version:
+    # Python <=3.10 produces "lambda :" (with space before colon);
+    # Python 3.11+   produces "lambda:"  (no space).
+    # _parse_field_kwargs uses ast.unparse on BOTH the existing and generated
+    # sides, so the raw strings here may differ by a single space depending on
+    # the interpreter.  _normalize_kw_for_eq() normalises this via
+    # _norm_lambda_ws() after the dict lookup, so the value stored here only
+    # needs to be recognisable — the no-space form (3.11 canonical) is used.
+    "datetime.utcnow": "lambda: datetime.now(timezone.utc)",
     # uuid4 (from `from uuid import uuid4`) and uuid.uuid4 (from `import uuid`)
     # are semantically identical.  Treat them as equal so existing hand-written
     # code using the direct-import form is never touched.
     "uuid4": "uuid.uuid4",
 }
+
+
+def _norm_lambda_ws(s: str) -> str:
+    """Normalise zero-argument lambda whitespace for cross-version compat.
+
+    ``ast.unparse()`` output for ``lambda: …`` differs between Python versions:
+    * Python <=3.10: ``"lambda : expr"`` (space before colon)
+    * Python  3.11+: ``"lambda: expr"``  (no space)
+
+    Both sides of an equality comparison go through ``ast.unparse`` (via
+    ``_parse_field_kwargs``), so we must normalise before comparing to avoid
+    spurious rewrites depending on which Python is running.
+    """
+    if s.startswith("lambda"):
+        return re.sub(r"^lambda\s*:", "lambda:", s)
+    return s
 
 
 def _normalize_kw_for_eq(kw: dict[str, str]) -> dict[str, str]:
@@ -301,6 +323,10 @@ def _normalize_kw_for_eq(kw: dict[str, str]) -> dict[str, str]:
     ``datetime.utcnow`` → ``lambda: datetime.now(timezone.utc)``) so that
     fields using the deprecated form are not spuriously rewritten just because
     the generator produces the modern form.
+
+    Finally normalises zero-argument lambda whitespace via ``_norm_lambda_ws``
+    so that ``"lambda :"`` (Python <=3.10 ast.unparse) and ``"lambda:"``
+    (Python 3.11+) compare as equal.
     """
     result = dict(kw)
     for (old_key, old_val), (new_key, new_val) in _MUTABLE_DEFAULT_EQUIV.items():
@@ -309,7 +335,8 @@ def _normalize_kw_for_eq(kw: dict[str, str]) -> dict[str, str]:
             result[new_key] = new_val
     if "default_factory" in result:
         val = result["default_factory"]
-        result["default_factory"] = _DEFAULT_FACTORY_EQUIV.get(val, val)
+        val = _DEFAULT_FACTORY_EQUIV.get(val, val)
+        result["default_factory"] = _norm_lambda_ws(val)
     return result
 
 
@@ -458,10 +485,14 @@ def _rebuild_field_line(
             val = new_kw[key]
             if key.startswith("__pos_"):
                 merged.append(val)  # positional
-            elif key == "default_factory" and _DEFAULT_FACTORY_EQUIV.get(existing_val) == val:
+            elif key == "default_factory" and (
+                (_canon := _DEFAULT_FACTORY_EQUIV.get(existing_val)) is not None
+                and _norm_lambda_ws(_canon) == _norm_lambda_ws(val)
+            ):
                 # The existing value is a known equivalent of what the generator
                 # produces (e.g. datetime.utcnow ↔ lambda: datetime.now(timezone.utc),
-                # uuid4 ↔ uuid.uuid4).
+                # uuid4 ↔ uuid.uuid4).  Normalise lambda whitespace on both sides
+                # for Python 3.10/3.11 ast.unparse compat.
                 # Preserve the user's original form so we don't introduce noisy diffs.
                 merged.append(f"default_factory={existing_val}")
             elif existing_val == val and key in existing_raw:

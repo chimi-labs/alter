@@ -2,6 +2,65 @@
 
 All notable changes to Alter are documented here.
 
+## [0.2.3] — 2026-03-15
+
+### Bug Fixes
+
+#### `alter mcp` crashes with a cryptic `ModuleNotFoundError` when `mcp < 1.2.0` (Bug A)
+
+`alter mcp` calls `init_mcp()` which imports `FastMCP` from `mcp.server.fastmcp`. That
+submodule was introduced in `mcp 1.2.0`; older installations raise a bare
+`ModuleNotFoundError: No module named 'mcp.server.fastmcp'` with no indication of how
+to fix it.
+
+`init_mcp()` now wraps the import in a `try/except ImportError` and raises an
+`AlterError` with an actionable message:
+
+```
+'alter mcp' requires mcp>=1.2.0, but mcp==1.1.3 is installed.
+Upgrade with: pip install 'mcp>=1.2.0'
+```
+
+The error surfaces cleanly in the CLI (no "MCP server error:" prefix) because the CLI
+already handles `AlterError` separately from generic exceptions.
+
+A second guard wraps the cosmetic `_mcp_server.version` assignment in
+`try/except AttributeError` so that future changes to `mcp` internals do not break
+`alter mcp` startup.
+
+#### `alter apply` spuriously rewrites `datetime.now(timezone.utc)` defaults on Python 3.11+ (Bug B)
+
+When a model file contained a column with `default_factory=lambda: datetime.now(timezone.utc)`,
+running `alter apply` on Python 3.11+ would rewrite the line even though nothing had
+changed in the schema.
+
+Root cause: `_parse_field_kwargs` normalises kwargs via `ast.unparse`, and the Python
+`ast` module changed how it serialises zero-argument lambdas between versions —
+Python ≤ 3.10 produces `"lambda :"` (with a space after `lambda`), while Python 3.11+
+produces `"lambda:"` (no space). Because `ast.unparse` is applied to both the
+existing code and the freshly generated schema line, the comparison reached different
+sides of the `_DEFAULT_FACTORY_EQUIV` lookup depending on the Python version in use,
+causing the surgical patcher to believe a change was needed when there was none.
+
+Two-part fix in `generators/_surgical.py`:
+
+1. **`_norm_lambda_ws()` helper** — strips extraneous whitespace between `lambda` and
+   `:` for zero-argument lambdas (`re.sub(r"^lambda\s*:", "lambda:", s)`), making
+   lambda strings compare equal across Python versions.
+
+2. **Normalization applied consistently** — `_normalize_kw_for_eq` now calls
+   `_norm_lambda_ws` on `default_factory` values after the `_DEFAULT_FACTORY_EQUIV`
+   lookup, so both the existing-file side and the schema side are normalised before
+   comparison. The rebuild path in `_rebuild_field_line` applies the same
+   normalization when checking whether the existing value is canonically equivalent.
+
+The `_DEFAULT_FACTORY_EQUIV` dict value for `utcnow` was also corrected from
+`"lambda : datetime.now(timezone.utc)"` (with spurious space, matching old Python 3.10
+`ast.unparse` output) to `"lambda: datetime.now(timezone.utc)"` (canonical form) — the
+`_norm_lambda_ws` normalization then makes both forms match on all Python versions.
+
+---
+
 ## [0.2.2] — 2026-03-15
 
 ### Bug Fixes

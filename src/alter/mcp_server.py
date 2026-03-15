@@ -128,10 +128,24 @@ def init_mcp(alter_file_path: Path) -> None:
     global _staging, _path
     _path = alter_file_path
     _staging = StagingManager(alter_file_path)
-    from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
+    try:
+        from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
+    except ImportError:
+        import importlib.metadata as _meta  # noqa: PLC0415
+        try:
+            _ver = _meta.version("mcp")
+        except _meta.PackageNotFoundError:
+            _ver = "unknown"
+        raise AlterError(
+            f"'alter mcp' requires mcp>=1.2.0, but mcp=={_ver} is installed. "
+            f"Upgrade with: pip install 'mcp>=1.2.0'"
+        ) from None
     from alter import __version__  # noqa: PLC0415
     real_mcp = FastMCP("Alter")
-    real_mcp._mcp_server.version = __version__
+    try:
+        real_mcp._mcp_server.version = __version__
+    except AttributeError:
+        pass  # mcp internals changed — version label is cosmetic, not critical
     mcp._init_real(real_mcp)
 
 
