@@ -102,15 +102,33 @@ def _detect_orm(cwd: Path) -> str:
     return "sqlmodel"  # safe default
 
 
+def _has_py_files(directory: Path) -> bool:
+    """Return True if *directory* contains at least one .py file (recursive).
+
+    Skips virtual-environment and cache directories so that an ``app/``
+    containing only a ``.venv`` subtree is not treated as a model directory.
+    Short-circuits on the first match for speed.
+    """
+    for f in directory.rglob("*.py"):
+        if not any(part in _SKIP_DIRS for part in f.parts):
+            return True
+    return False
+
+
 def _find_model_dirs(cwd: Path) -> list[Path]:
-    """Return candidate model directories to scan."""
+    """Return candidate model directories that contain Python source files.
+
+    Checks only whether a directory exists AND has at least one ``.py`` file
+    (ignoring virtual-environment / cache subtrees).  This prevents an empty
+    ``app/`` directory from being chosen over the project root.
+    """
     candidates = [
         cwd / "app" / "models",
         cwd / "app",
         cwd / "src",
         cwd,
     ]
-    return [d for d in candidates if d.is_dir()]
+    return [d for d in candidates if d.is_dir() and _has_py_files(d)]
 
 
 def _load_demo_schema() -> Path:
@@ -220,6 +238,15 @@ def init(orm_override: str | None, output: str | None, force: bool) -> None:
 
     from alter.layout import auto_layout_tables
     auto_layout_tables(result.schema.tables)
+
+    # Record the most-used model file as sqlmodel_module so that
+    # 'alter import' knows where to put new SQL-imported tables.
+    # Only override the default when we actually found model files.
+    file_paths = [t.file_path for t in result.schema.tables if t.file_path]
+    if file_paths:
+        from collections import Counter
+        result.schema.metadata.sqlmodel_module = Counter(file_paths).most_common(1)[0][0]
+
     result.schema.save(out_path)
     click.echo(
         f"  Created {out_path.name} — "
@@ -258,8 +285,16 @@ def sync(alter_file: str | None, model_dir: str | None) -> None:
     cwd = path.parent
     scan_dir = Path(model_dir) if model_dir else None
     if scan_dir is None:
-        dirs = _find_model_dirs(cwd)
-        scan_dir = dirs[0] if dirs else cwd
+        # If the schema already has tables with recorded file paths, scan from
+        # the project root so that all model files are found regardless of
+        # directory structure — and new files added outside the original
+        # location are picked up too.  Fall back to the directory heuristic
+        # only for schemas with no tables (e.g. first sync on an empty schema).
+        if any(t.file_path for t in current.tables):
+            scan_dir = cwd
+        else:
+            dirs = _find_model_dirs(cwd)
+            scan_dir = dirs[0] if dirs else cwd
     try:
         from alter.parsers.base import get_parser
         parser = get_parser(current.orm, project_root=cwd)
@@ -408,6 +443,18 @@ def apply(alter_file: str | None, preview: bool) -> None:
         fp = t.file_path or _default_model_path(schema, project_root)
         file_groups.setdefault(fp, []).append(t)
 
+    # Also discover model files on disk that are NOT already in file_groups.
+    # These may contain table classes whose schema entries were deleted — we
+    # must visit them so update_models() can remove the deleted classes.
+    from alter.parsers.base import get_parser as _get_parser  # noqa: PLC0415
+    _file_parser = _get_parser(schema.orm, project_root=project_root)
+    for _py_file in sorted(project_root.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in _py_file.parts):
+            continue
+        _rel = str(_py_file.relative_to(project_root))
+        if _rel not in file_groups and _file_parser.detect_orm(_py_file):
+            file_groups[_rel] = []
+
     changed = 0
     default_path = _default_model_path(schema, project_root)
     for rel_path, tables in sorted(file_groups.items()):
@@ -491,8 +538,11 @@ def diff(alter_file: str | None, fmt: str) -> None:
         raise click.ClickException(str(exc)) from exc
 
     cwd = path.parent
-    dirs = _find_model_dirs(cwd)
-    scan_dir = dirs[0] if dirs else cwd
+    if any(t.file_path for t in current.tables):
+        scan_dir = cwd
+    else:
+        dirs = _find_model_dirs(cwd)
+        scan_dir = dirs[0] if dirs else cwd
     try:
         from alter.parsers.base import get_parser
         parser = get_parser(current.orm, project_root=cwd)

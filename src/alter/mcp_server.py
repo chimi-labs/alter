@@ -246,6 +246,22 @@ def _apply_to_code_impl(
         fp = t.file_path or _default_model_path(schema, project_root)
         file_groups.setdefault(fp, []).append(t)
 
+    # Also discover model files on disk that are NOT already in file_groups.
+    # These may contain table classes whose schema entries were deleted — we
+    # must visit them so update_models() can remove the deleted classes.
+    _APPLY_SKIP: frozenset[str] = frozenset({
+        ".venv", "venv", ".env", "__pycache__", ".git",
+        "node_modules", "site-packages", ".tox", ".mypy_cache",
+    })
+    from alter.parsers.base import get_parser as _get_parser  # noqa: PLC0415
+    _file_parser = _get_parser(schema.orm, project_root=project_root)
+    for _py_file in sorted(project_root.rglob("*.py")):
+        if any(part in _APPLY_SKIP for part in _py_file.parts):
+            continue
+        _rel = str(_py_file.relative_to(project_root))
+        if _rel not in file_groups and _file_parser.detect_orm(_py_file):
+            file_groups[_rel] = []
+
     diffs: list[str] = []
     writes: list[str] = []
     default_path = _default_model_path(schema, project_root)
@@ -497,8 +513,8 @@ def add_table(
         if not columns:
             return f"Added table '{name}' with default id column."
         return f"Added table '{name}' with {len(columns)} column(s)."
-    except (AlterError, ValueError) as exc:
-        return f"Error: {exc}"
+    except (AlterError, ValueError):
+        raise
 
 
 @mcp.tool()
@@ -518,18 +534,18 @@ def add_file(file_path: str) -> str:
     abs_path = (project_root / file_path).resolve()
 
     if not abs_path.exists():
-        return f"Error: file not found: {file_path}"
+        raise ValueError(f"File not found: {file_path}")
 
     parser = get_parser(staging.current_schema.orm, project_root=project_root)
     if not parser.detect_orm(abs_path):
-        return f"Error: {file_path} does not contain {staging.current_schema.orm} models."
+        raise ValueError(f"{file_path} does not contain {staging.current_schema.orm} models.")
 
     try:
         # Use parse_file_result to capture enum definitions too — custom enum
         # types on columns would fail schema validation if enums are not added.
         file_result = parser.parse_file_result(abs_path)
-    except Exception as exc:
-        return f"Error parsing {file_path}: {exc}"
+    except Exception:
+        raise
 
     tables = file_result.schema.tables
     enums = file_result.schema.enums
@@ -562,8 +578,8 @@ def add_file(file_path: str) -> str:
         staging.propose(apply)
         new_tables = [t for t in tables if t.name not in existing_names]
         return f"Added {len(new_tables)} table(s) from {rel_path}: {', '.join(t.name for t in new_tables)}"
-    except (AlterError, ValueError) as exc:
-        return f"Error: {exc}"
+    except (AlterError, ValueError):
+        raise
 
 
 @mcp.tool()
@@ -661,8 +677,8 @@ def add_column(
     try:
         staging.propose(apply)
         return f"Added column '{name}' to table '{table}'."
-    except (AlterError, ValueError) as exc:
-        return f"Error: {exc}"
+    except (AlterError, ValueError):
+        raise
 
 
 @mcp.tool()
@@ -780,8 +796,8 @@ def modify_column(
     try:
         staging.propose(apply)
         return f"Modified column '{column}' in table '{table}'."
-    except (AlterError, ValueError) as exc:
-        return f"Error: {exc}"
+    except (AlterError, ValueError):
+        raise
 
 
 @mcp.tool()
@@ -827,8 +843,8 @@ def add_relation(
     try:
         staging.propose(apply)
         return f"Added relation {from_table}.{from_column} → {to_table}.{to_column}."
-    except (AlterError, ValueError) as exc:
-        return f"Error: {exc}"
+    except (AlterError, ValueError):
+        raise
 
 
 @mcp.tool()
@@ -884,8 +900,8 @@ def remove_entity(table: str, column: str | None = None) -> str:
         staging.propose(apply)
         target = f"'{table}.{column}'" if column else f"table '{table}'"
         return f"Dropped {target} from proposed schema."
-    except (AlterError, ValueError) as exc:
-        return f"Error: {exc}"
+    except (AlterError, ValueError):
+        raise
 
 
 @mcp.tool()
@@ -950,8 +966,8 @@ def rename_entity(table: str, new_name: str, column: str | None = None) -> str:
         staging.propose(apply)
         target = f"'{table}.{column}'" if column else f"table '{table}'"
         return f"Renamed {target} → '{new_name}'."
-    except (AlterError, ValueError) as exc:
-        return f"Error: {exc}"
+    except (AlterError, ValueError):
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -1047,9 +1063,9 @@ def discard_changes() -> str:
 def undo() -> str:
     """Undo the most recent schema proposal."""
     staging = _get_staging()
-    result = staging.undo()
-    if result is None:
+    if not staging.can_undo():
         return "Nothing to undo."
+    staging.undo()
     return "Undid last change."
 
 
@@ -1057,9 +1073,9 @@ def undo() -> str:
 def redo() -> str:
     """Re-apply the most recently undone schema proposal."""
     staging = _get_staging()
-    result = staging.redo()
-    if result is None:
+    if not staging.can_redo():
         return "Nothing to redo."
+    staging.redo()
     return "Redid last undone change."
 
 
@@ -1077,8 +1093,8 @@ def apply_to_code(preview: bool = False) -> str:
     project_root = _get_path().parent
     try:
         return _apply_to_code_impl(staging, project_root, preview=preview)
-    except Exception as exc:
-        return f"Error: {exc}"
+    except Exception:
+        raise
 
 
 @mcp.tool()
@@ -1091,8 +1107,8 @@ def sync_from_code() -> str:
     project_root = _get_path().parent
     try:
         return _sync_from_code_impl(staging, project_root)
-    except Exception as exc:
-        return f"Error: {exc}"
+    except Exception:
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -1119,7 +1135,7 @@ def import_schema(source: str, format: str = "sql") -> str:
 
             src_path = Path(source)
             if not src_path.exists():
-                return f"Error: file not found: {source}"
+                raise ValueError(f"File not found: {source}")
             imported = import_alter_file(src_path)
         else:
             from alter.importers.sql import import_sql  # noqa: PLC0415
@@ -1135,8 +1151,8 @@ def import_schema(source: str, format: str = "sql") -> str:
             imported = sql_result.schema
             import_warnings = sql_result.warnings
 
-    except Exception as exc:
-        return f"Error importing schema: {exc}"
+    except Exception:
+        raise
 
     def apply(schema: AlterSchema) -> AlterSchema:
         s = copy.deepcopy(schema)
@@ -1187,8 +1203,8 @@ def export_schema(format: str = "sql", proposed: bool = False) -> str:
         else:
             from alter.exporters.sql import export_sql  # noqa: PLC0415
             return export_sql(schema)
-    except Exception as exc:
-        return f"Error exporting schema: {exc}"
+    except Exception:
+        raise
 
 
 @mcp.tool()
@@ -1218,8 +1234,8 @@ def introspect_db(
     """
     cs = connection_string or os.environ.get("DATABASE_URL")
     if not cs:
-        return (
-            "Error: no connection string provided and DATABASE_URL is not set.\n"
+        raise ValueError(
+            "No connection string provided and DATABASE_URL is not set. "
             "Pass connection_string or set DATABASE_URL."
         )
 
@@ -1233,8 +1249,8 @@ def introspect_db(
             schema=schema,
             orm=staging.current_schema.orm,
         )
-    except Exception as exc:
-        return f"Error introspecting database: {exc}"
+    except Exception:
+        raise
 
     def apply(schema: AlterSchema) -> AlterSchema:
         s = copy.deepcopy(schema)

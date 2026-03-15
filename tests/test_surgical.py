@@ -206,11 +206,24 @@ def test_class_needs_update_new_column():
     assert _class_needs_update(CLASS_WITH_EXTRAS, schema_fields)
 
 
-def test_class_needs_update_extra_column_in_file_not_in_schema_does_not_trigger():
-    """Columns in the file that are not in the schema should be left alone."""
+def test_class_needs_update_field_column_deleted_from_schema_triggers():
+    """A Field()-style column present in the file but absent from the schema means
+    the column was deleted — the class needs updating to remove it."""
     schema_fields = [
         "    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)",
-        # 'name' is in the file but not in schema_fields — should NOT trigger update
+        # 'name' is in the file but not in schema_fields → deleted → must trigger
+    ]
+    assert _class_needs_update(CLASS_WITH_EXTRAS, schema_fields)
+
+
+def test_class_needs_update_relationship_not_in_schema_does_not_trigger():
+    """Relationship() lines are not schema columns — their absence from
+    schema_field_lines must NOT trigger an update."""
+    schema_fields = [
+        "    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)",
+        "    name: str = Field(max_length=100)",
+        # memberships / audit_logs are Relationship() calls — not in schema_fields
+        # but that is expected and must not trigger a spurious update
     ]
     assert not _class_needs_update(CLASS_WITH_EXTRAS, schema_fields)
 

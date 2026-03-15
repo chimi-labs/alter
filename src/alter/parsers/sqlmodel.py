@@ -22,6 +22,7 @@ from alter.parsers.base import (
     _make_relation,
     _node_to_type_str,
     _parse_enum_class,
+    deduplicate_relations,
     deduplicate_tables,
     extract_imports,
     iter_py_files,
@@ -199,6 +200,8 @@ class SQLModelParser(BaseParser):
                 schema.enums.append(enum_def)
 
         schema.tables = deduplicate_tables(schema.tables, all_warnings)
+        table_names = {t.name for t in schema.tables}
+        schema.relations = deduplicate_relations(schema.relations, table_names, all_warnings)
 
         # Post-filter: only keep enums that are actually referenced by at least
         # one column in a parsed table.  This removes enums swept up from DTO

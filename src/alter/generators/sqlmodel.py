@@ -283,12 +283,18 @@ class SQLModelGenerator(BaseGenerator):
         schema_classes: set[str] = set(table_by_class) | set(enum_by_class)
 
         # Build replacements: (start, end, patched_lines) — applied bottom-up
+        # ORM table class names in this file: those with an explicit __tablename__.
+        # Only these are auto-removed when absent from the schema; mixins, base
+        # classes, and helper classes (no __tablename__) are always left untouched.
+        orm_class_names: set[str] = set(tablename_to_class.values())
+
         replacements: list[tuple[int, int, list[str]]] = []
         for cls_name, (start, end) in existing_classes.items():
             if cls_name not in schema_classes:
-                # Class exists in file but not in schema.
-                # Leave it untouched — destructive removal requires explicit
-                # confirmation at the CLI/MCP layer, not inside the generator.
+                # If the class is an ORM table (has __tablename__) and its table
+                # was deleted from the schema, remove it from the file.
+                if cls_name in orm_class_names:
+                    replacements.append((start, end, []))
                 continue
             if cls_name in table_by_class:
                 # Surgical update: preserve docstrings, Relationship lines,

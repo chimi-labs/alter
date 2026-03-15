@@ -130,9 +130,13 @@ alter apply --preview   # see exactly what will change (unified diff)
 alter apply             # write the changes to your model files
 ```
 
-`alter apply` is surgical — it only modifies the classes that changed. Your docstrings,
-`Relationship()` definitions, trailing inline comments, hand-written `Field()` kwarg order,
-and mutable defaults written as `default={}` or `default=[]` are all preserved verbatim.
+`alter apply` is surgical — it only touches what the schema says has changed:
+
+- **Additions** — new tables are appended as new classes; new columns are inserted after the last existing field.
+- **Modifications** — changed `Field()` kwargs are rebuilt in-place, preserving your original kwarg order, multi-line formatting, and inline comments.
+- **Deletions** — tables removed from the canvas have their class deleted from the model file; columns removed from a table have their `Field()` line removed. If a file's last table is deleted, the file is still visited and the class is removed.
+
+Your docstrings, `Relationship()` definitions, trailing inline comments, hand-written `Field()` kwarg order, and mutable defaults written as `default={}` or `default=[]` are all preserved verbatim.
 
 For example, drawing a `Payment` table on the canvas and clicking **Commit** writes this to
 `app/models.py`:

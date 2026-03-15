@@ -152,6 +152,14 @@ class StagingManager:
         """Return ``True`` if there are uncommitted proposals."""
         return self.proposed_schema is not None
 
+    def can_undo(self) -> bool:
+        """Return ``True`` if there is at least one change to undo."""
+        return bool(self._undo_stack)
+
+    def can_redo(self) -> bool:
+        """Return ``True`` if there is at least one undone change to redo."""
+        return bool(self._redo_stack)
+
     def get_diff(self) -> list[SchemaChange]:
         """Return the diff between current and proposed schemas.
 

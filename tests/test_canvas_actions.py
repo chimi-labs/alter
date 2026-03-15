@@ -545,3 +545,160 @@ class TestApplyModifyColumnRename:
     def test_nonexistent_column_is_a_noop(self) -> None:
         s = _make_simple_schema()
         _apply_modify_column(s, "users", "ghost_col", {"nullable": False})
+
+
+# ---------------------------------------------------------------------------
+# Bug 09 — deletion tests
+# ---------------------------------------------------------------------------
+
+
+def _users_table_full(file_path: str = "app/models.py") -> Table:
+    """users table with id, email, role, created_at columns."""
+    from alter.schema import Column
+    return Table(
+        name="users",
+        file_path=file_path,
+        columns=[
+            Column(name="id", type="uuid", primary_key=True),
+            Column(name="email", type="string", unique=True),
+            Column(name="role", type="string"),
+            Column(name="created_at", type="datetime"),
+        ],
+    )
+
+
+def test_apply_removes_deleted_column(tmp_path: Path) -> None:
+    """Deleting a column from the schema and applying must remove the field."""
+    # Create table with 4 columns and write model file
+    alter_file, staging = _make_schema(tmp_path, [_users_table_full()])
+    _apply_to_code_impl(staging, tmp_path, preview=False)
+
+    model_file = tmp_path / "app" / "models.py"
+    assert "role" in model_file.read_text()
+
+    # Now delete 'role' from the schema (simulate canvas deletion)
+    import copy
+    def drop_role(s: AlterSchema) -> AlterSchema:
+        s2 = copy.deepcopy(s)
+        for t in s2.tables:
+            if t.name == "users":
+                t.columns = [c for c in t.columns if c.name != "role"]
+        return s2
+
+    staging.propose(drop_role)
+    staging.commit()
+
+    msg = _apply_to_code_impl(staging, tmp_path, preview=False)
+    assert "role" not in model_file.read_text()
+    assert "email" in model_file.read_text()
+    assert "id" in model_file.read_text()
+
+
+def test_apply_delete_column_preview_shows_diff(tmp_path: Path) -> None:
+    """Preview mode must show the deleted field as a removed line."""
+    alter_file, staging = _make_schema(tmp_path, [_users_table_full()])
+    _apply_to_code_impl(staging, tmp_path, preview=False)
+
+    import copy
+    def drop_role(s: AlterSchema) -> AlterSchema:
+        s2 = copy.deepcopy(s)
+        for t in s2.tables:
+            if t.name == "users":
+                t.columns = [c for c in t.columns if c.name != "role"]
+        return s2
+
+    staging.propose(drop_role)
+    staging.commit()
+
+    diff = _apply_to_code_impl(staging, tmp_path, preview=True)
+    assert "-" in diff       # there are removed lines
+    assert "role" in diff    # the removed line mentions 'role'
+
+
+def test_apply_removes_deleted_table_class_from_shared_file(tmp_path: Path) -> None:
+    """Deleting a table that shares a file with another table removes only its class."""
+    from alter.schema import Column
+    users = Table(
+        name="users",
+        file_path="app/models.py",
+        columns=[Column(name="id", type="uuid", primary_key=True)],
+    )
+    posts = Table(
+        name="posts",
+        file_path="app/models.py",
+        columns=[Column(name="id", type="uuid", primary_key=True)],
+    )
+    alter_file, staging = _make_schema(tmp_path, [users, posts])
+    _apply_to_code_impl(staging, tmp_path, preview=False)
+
+    model_file = tmp_path / "app" / "models.py"
+    assert "Users" in model_file.read_text() or "users" in model_file.read_text()
+    assert "Posts" in model_file.read_text() or "posts" in model_file.read_text()
+
+    # Delete posts from schema
+    import copy
+    def drop_posts(s: AlterSchema) -> AlterSchema:
+        s2 = copy.deepcopy(s)
+        s2.tables = [t for t in s2.tables if t.name != "posts"]
+        return s2
+
+    staging.propose(drop_posts)
+    staging.commit()
+
+    _apply_to_code_impl(staging, tmp_path, preview=False)
+    content = model_file.read_text()
+    # users class must remain
+    assert "__tablename__" in content
+    assert '"users"' in content
+    # posts class must be gone
+    assert '"posts"' not in content
+
+
+def test_apply_removes_deleted_table_class_from_own_file(tmp_path: Path) -> None:
+    """Deleting the only table in a file must still update that file (Fix 4)."""
+    from alter.schema import Column
+    dummy = Table(
+        name="dummy",
+        file_path="app/dummy_models.py",
+        columns=[Column(name="id", type="uuid", primary_key=True)],
+    )
+    main_table = Table(
+        name="users",
+        file_path="app/models.py",
+        columns=[Column(name="id", type="uuid", primary_key=True)],
+    )
+    alter_file, staging = _make_schema(tmp_path, [main_table, dummy])
+    _apply_to_code_impl(staging, tmp_path, preview=False)
+
+    dummy_file = tmp_path / "app" / "dummy_models.py"
+    assert dummy_file.exists()
+    assert "Dummy" in dummy_file.read_text() or "dummy" in dummy_file.read_text()
+
+    # Delete 'dummy' from schema — its file is no longer referenced by any table
+    import copy
+    def drop_dummy(s: AlterSchema) -> AlterSchema:
+        s2 = copy.deepcopy(s)
+        s2.tables = [t for t in s2.tables if t.name != "dummy"]
+        return s2
+
+    staging.propose(drop_dummy)
+    staging.commit()
+
+    # After apply, dummy_models.py must no longer contain the Dummy class
+    _apply_to_code_impl(staging, tmp_path, preview=False)
+    assert "Dummy" not in dummy_file.read_text()
+    assert '"dummy"' not in dummy_file.read_text()
+
+
+def test_apply_preserves_helper_function_after_column_deletion(tmp_path: Path) -> None:
+    """Non-schema helpers (functions, comments) survive column deletion."""
+    model_file = tmp_path / "app" / "models.py"
+    model_file.parent.mkdir(parents=True, exist_ok=True)
+    model_file.write_text(_SQLMODEL_WITH_HELPER)
+
+    # Schema has only id + email (no extra columns) — matches helper file
+    alter_file, staging = _make_schema(tmp_path, [_users_table()])
+
+    # After apply no changes expected (file already matches schema)
+    msg = _apply_to_code_impl(staging, tmp_path, preview=False)
+    assert "get_display_name" in model_file.read_text()

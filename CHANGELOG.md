@@ -2,6 +2,44 @@
 
 All notable changes to Alter are documented here.
 
+## [0.2.2] — 2026-03-15
+
+### Bug Fixes
+
+#### `alter apply` now removes deleted tables and columns from code (Bug 09)
+
+`alter apply` (and `apply_to_code` via MCP) previously ignored deletions — removing a table or column from the canvas and running `alter apply` would report "No changes — files are already up to date." while the Python class or field remained in the model file untouched. Four layers were involved:
+
+1. **Column deletion — update detection** (`generators/_surgical.py` · `_class_needs_update`): the function only checked that schema columns were present in the file, never the reverse. A `Field()`-style column that existed in the file but had been removed from the schema was silently skipped. Added a reverse check: if any `Field()` / `mapped_column()` column in the file is absent from the schema, the class is flagged for update. Bare annotations (`name: str`) are intentionally excluded from this check — they may be non-ORM helper attributes and should never be auto-deleted.
+
+2. **Column deletion — patch logic** (`generators/_surgical.py` · `_surgical_patch_class`): when walking source lines, a `Field()`-style column not found in `schema_map` fell into the "keep verbatim" branch — indistinguishable from an unchanged field. Restructured the branch: `col_name in schema_map` → keep or rebuild as before; `col_name not in schema_map` → omit from output (deleted). `last_field_result_idx` is now only updated when output is actually produced, so new-column insertion remains correctly positioned after the last kept field.
+
+3. **Table deletion** (`generators/sqlmodel.py`, `generators/sqlalchemy.py` · `update_models`): classes present in the file but absent from the schema were unconditionally skipped with a "leave untouched" comment. Now uses `tablename_to_class` (which maps `__tablename__` string → class name) to identify genuine ORM table classes. If a class has `__tablename__` and its table was deleted from the schema, it is removed from the file. Mixins, base classes, and helper classes without `__tablename__` are always left untouched.
+
+4. **File discovery** (`mcp_server.py` · `_apply_to_code_impl`, `cli.py` · `apply`): `file_groups` was built only from `schema.tables`, so a file whose last table was deleted was never visited at all. Both the CLI `apply` command and `_apply_to_code_impl` now scan the project root for ORM-containing `.py` files (using the parser's `detect_orm()`) and add any file not already in `file_groups` with an empty table list, ensuring `update_models()` is called and can remove the deleted class. Virtual environments, `__pycache__`, and other non-source directories are skipped.
+
+`alter apply --preview` correctly shows deleted fields and classes as red lines in the unified diff before any files are written.
+
+---
+
+#### MCP `undo`/`redo` always reported "Nothing to undo/redo" even after changes (Bug 01)
+
+`undo()` and `redo()` in `StagingManager` return `None` both when the stack is empty and when the operation succeeds but reverts the schema to its original state. The MCP tool handlers checked the return value to distinguish the two cases, which was unreliable. Added explicit `can_undo()` and `can_redo()` methods to `StagingManager` and changed the tool handlers to check those before calling `undo()`/`redo()`.
+
+#### Duplicate relations when tables are defined across multiple files (Bug 02)
+
+`parse_directory()` in both the SQLModel and SQLAlchemy parsers accumulated `Relation` objects across all scanned files without deduplication. When a table (and its relations) appeared in more than one file — e.g. a base model re-exported from a package `__init__.py` — the schema ended up with duplicate relation entries, which produced broken Mermaid diagrams and duplicate `FOREIGN KEY` clauses in SQL export. Added `deduplicate_relations()` to `parsers/base.py` (mirroring the existing `deduplicate_tables()`), which keeps the first definition of each relation name and also prunes orphaned relations whose source table was itself dropped by deduplication. Both parsers now call it immediately after `deduplicate_tables()`.
+
+#### MCP tool errors returned `isError: false` (Bug 05)
+
+All `except` branches in `mcp_server.py` tool handlers returned error strings (`return f"Error: {exc}"`) instead of raising. FastMCP's internal error chain only sets `isError: true` on the MCP response when the tool function raises an exception; returning a string always produces `isError: false`, so AI assistants had no reliable way to detect failures. All 17 return-error patterns replaced with `raise` (re-raise in `except` blocks) or `raise ValueError(...)` (inline guards). The 27 affected tests in `test_mcp_server.py` updated to use `pytest.raises`.
+
+#### `alter sync`/`alter diff` scan the wrong directory on multi-file projects (Bug 07)
+
+`_find_model_dirs()` in `cli.py` selected the first existing directory from a candidate list (`app/models`, `app/`, `src/`, `cwd`) without checking whether the directory contained any Python files. An empty `app/` directory would win over the project root even if all models were in `cwd`. Two-part fix: (1) `_find_model_dirs()` now requires at least one `.py` file (recursive, skipping venv/cache dirs) via a new `_has_py_files()` helper — empty directories are excluded. (2) `sync` and `diff` commands now use the `file_path` values recorded in `schema.tables` as the primary source of truth when tables are already tracked, falling back to the directory heuristic only for empty schemas. `alter init` also now records the most common model file path in `schema.metadata.sqlmodel_module` rather than using a hardcoded `"app/models.py"` default.
+
+---
+
 ## [0.2.1] — 2026-03-14
 
 ### Bug Fixes

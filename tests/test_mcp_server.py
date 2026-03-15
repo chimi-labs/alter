@@ -114,8 +114,8 @@ def test_add_table_seeds_id_column() -> None:
 
 def test_add_table_duplicate_returns_error() -> None:
     add_table("users")
-    msg = add_table("users")
-    assert msg.startswith("Error:")
+    with pytest.raises((ValueError, Exception)):
+        add_table("users")
 
 
 def test_add_table_custom_file_path() -> None:
@@ -212,26 +212,26 @@ def test_add_table_with_columns_fk_creates_relation() -> None:
 
 
 def test_add_table_with_columns_invalid_fk_returns_error() -> None:
-    msg = add_table(
-        "posts",
-        columns=[{"name": "user_id", "type": "uuid", "foreign_key": "nonexistent.id"}],
-    )
-    assert msg.startswith("Error:")
+    with pytest.raises(Exception):
+        add_table(
+            "posts",
+            columns=[{"name": "user_id", "type": "uuid", "foreign_key": "nonexistent.id"}],
+        )
 
 
 def test_add_table_with_columns_invalid_type_returns_error() -> None:
-    msg = add_table("things", columns=[{"name": "x", "type": "notavalidtype"}])
-    assert msg.startswith("Error:")
+    with pytest.raises(Exception):
+        add_table("things", columns=[{"name": "x", "type": "notavalidtype"}])
 
 
 def test_add_table_with_columns_missing_name_returns_error() -> None:
-    msg = add_table("things", columns=[{"type": "int"}])
-    assert msg.startswith("Error:")
+    with pytest.raises(Exception):
+        add_table("things", columns=[{"type": "int"}])
 
 
 def test_add_table_with_columns_missing_type_returns_error() -> None:
-    msg = add_table("things", columns=[{"name": "x"}])
-    assert msg.startswith("Error:")
+    with pytest.raises(Exception):
+        add_table("things", columns=[{"name": "x"}])
 
 
 def test_add_table_with_columns_index_creates_index() -> None:
@@ -278,37 +278,36 @@ def test_add_column_visible_in_proposed() -> None:
 
 
 def test_add_column_table_not_found_returns_error() -> None:
-    msg = add_column("nonexistent", "x", "string")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="not found"):
+        add_column("nonexistent", "x", "string")
 
 
 def test_add_column_duplicate_returns_error() -> None:
     add_table("users")
     add_column("users", "email", "string")
-    msg = add_column("users", "email", "string")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="already exists"):
+        add_column("users", "email", "string")
 
 
 def test_add_column_fk_nonexistent_table_returns_error() -> None:
     add_table("users")
-    msg = add_column("users", "org_id", "uuid", foreign_key="nonexistent_table.id")
-    assert msg.startswith("Error:")
-    assert "nonexistent_table" in msg
+    with pytest.raises(ValueError, match="nonexistent_table"):
+        add_column("users", "org_id", "uuid", foreign_key="nonexistent_table.id")
 
 
 def test_add_column_fk_nonexistent_column_returns_error() -> None:
     add_table("users")
     add_table("orgs")
     # orgs has only the seeded 'id' column — 'name' does not exist
-    msg = add_column("users", "org_id", "uuid", foreign_key="orgs.name")
-    assert msg.startswith("Error:")
-    assert "orgs.name" in msg
+    with pytest.raises(ValueError, match="orgs.name"):
+        add_column("users", "org_id", "uuid", foreign_key="orgs.name")
 
 
 def test_add_column_fk_nonexistent_target_leaves_no_partial_column() -> None:
     """A failed FK validation must not leave the column in the schema."""
     add_table("users")
-    add_column("users", "org_id", "uuid", foreign_key="ghost.id")
+    with pytest.raises(ValueError):
+        add_column("users", "org_id", "uuid", foreign_key="ghost.id")
     proposed = read_proposed()
     tbl = next(t for t in proposed["tables"] if t["name"] == "users")
     col_names = [c["name"] for c in tbl["columns"]]
@@ -335,8 +334,8 @@ def test_add_column_fk_valid_creates_column_and_relation() -> None:
 
 def test_add_column_fk_invalid_format_returns_error() -> None:
     add_table("users")
-    msg = add_column("users", "x", "uuid", foreign_key="no_dot_here")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="no_dot_here"):
+        add_column("users", "x", "uuid", foreign_key="no_dot_here")
 
 
 # ---------------------------------------------------------------------------
@@ -345,19 +344,19 @@ def test_add_column_fk_invalid_format_returns_error() -> None:
 
 
 def test_add_column_invalid_type_returns_error() -> None:
-    """Completely invalid type like 'invalid_type' returns an Error message."""
+    """Completely invalid type raises an exception with the type name in the message."""
     add_table("users")
-    msg = add_column("users", "test_col", "invalid_type")
-    assert msg.startswith("Error:")
-    assert "invalid_type" in msg
+    with pytest.raises((ValueError, Exception), match="invalid_type"):
+        add_column("users", "test_col", "invalid_type")
 
 
 def test_add_column_invalid_type_not_added_to_schema() -> None:
     """Schema must not change when add_column is called with an invalid type."""
     add_table("users")
-    add_column("users", "id", "uuid")
+    add_column("users", "email", "string")
     before = read_proposed()
-    add_column("users", "bad", "garbage_type")
+    with pytest.raises(Exception):
+        add_column("users", "bad", "garbage_type")
     after = read_proposed()
     users_before = next(t for t in before["tables"] if t["name"] == "users")
     users_after = next(t for t in after["tables"] if t["name"] == "users")
@@ -365,9 +364,11 @@ def test_add_column_invalid_type_not_added_to_schema() -> None:
 
 
 def test_add_column_invalid_type_error_message_lists_valid_types() -> None:
-    """Error message must include a list of valid built-in types."""
+    """Exception message must include a list of valid built-in types."""
     add_table("users")
-    msg = add_column("users", "x", "foobar")
+    with pytest.raises(Exception) as exc_info:
+        add_column("users", "x", "foobar")
+    msg = str(exc_info.value)
     assert "uuid" in msg
     assert "string" in msg
     assert "int" in msg
@@ -405,18 +406,15 @@ def test_add_column_enum_type_accepted_when_enum_defined() -> None:
 def test_add_column_enum_type_rejected_when_not_defined() -> None:
     """A PascalCase type that is NOT a defined enum must be rejected."""
     add_table("users")
-    msg = add_column("users", "role", "UndefinedEnum")
-    assert msg.startswith("Error:")
-    assert "UndefinedEnum" in msg
+    with pytest.raises(Exception, match="UndefinedEnum"):
+        add_column("users", "role", "UndefinedEnum")
 
 
 def test_add_column_lowercase_enum_name_rejected() -> None:
     """A lowercase string not in TYPE_MAP must NOT be treated as an enum."""
     add_table("users")
-    msg = add_column("users", "col", "mytype")
-    assert msg.startswith("Error:")
-    # Must mention valid types, not hint at enum resolution
-    assert "mytype" in msg
+    with pytest.raises(Exception, match="mytype"):
+        add_column("users", "col", "mytype")
 
 
 # ---------------------------------------------------------------------------
@@ -425,19 +423,19 @@ def test_add_column_lowercase_enum_name_rejected() -> None:
 
 
 def test_modify_column_invalid_type_returns_error() -> None:
-    """modify_column with invalid new_type must return an Error message."""
+    """modify_column with invalid new_type must raise an exception."""
     add_table("products")
     add_column("products", "price", "int")
-    msg = modify_column("products", "price", new_type="not_a_type")
-    assert msg.startswith("Error:")
-    assert "not_a_type" in msg
+    with pytest.raises(Exception, match="not_a_type"):
+        modify_column("products", "price", new_type="not_a_type")
 
 
 def test_modify_column_invalid_type_leaves_column_unchanged() -> None:
     """Schema must not change when modify_column is called with an invalid type."""
     add_table("products")
     add_column("products", "price", "int")
-    modify_column("products", "price", new_type="bogus")
+    with pytest.raises(Exception):
+        modify_column("products", "price", new_type="bogus")
     proposed = read_proposed()
     tbl = next(t for t in proposed["tables"] if t["name"] == "products")
     col = next(c for c in tbl["columns"] if c["name"] == "price")
@@ -478,8 +476,8 @@ def test_modify_column_changes_nullable() -> None:
 
 
 def test_modify_column_table_not_found_returns_error() -> None:
-    msg = modify_column("ghost", "col", new_type="string")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="not found"):
+        modify_column("ghost", "col", new_type="string")
 
 
 # ---------------------------------------------------------------------------
@@ -507,14 +505,14 @@ def test_add_relation_visible_in_proposed() -> None:
 
 def test_add_relation_from_table_not_found_returns_error() -> None:
     add_table("users")
-    msg = add_relation("missing_table", "col", "users", "id")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="not found"):
+        add_relation("missing_table", "col", "users", "id")
 
 
 def test_add_relation_to_table_not_found_returns_error() -> None:
     add_table("posts")
-    msg = add_relation("posts", "author_id", "missing_users", "id")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="not found"):
+        add_relation("posts", "author_id", "missing_users", "id")
 
 
 # ---------------------------------------------------------------------------
@@ -548,8 +546,8 @@ def test_remove_entity_drops_column() -> None:
 
 
 def test_remove_entity_table_not_found_returns_error() -> None:
-    msg = remove_entity("ghost_table")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="not found"):
+        remove_entity("ghost_table")
 
 
 # ---------------------------------------------------------------------------
@@ -588,8 +586,8 @@ def test_rename_entity_renames_column() -> None:
 
 
 def test_rename_entity_table_not_found_returns_error() -> None:
-    msg = rename_entity("ghost", "specter")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="not found"):
+        rename_entity("ghost", "specter")
 
 
 # ---------------------------------------------------------------------------
@@ -827,7 +825,7 @@ def test_add_file_success(fresh_staging: Path) -> None:
 
 
 def test_add_file_duplicate_returns_error(fresh_staging: Path) -> None:
-    """add_file returns an error message when all tables already exist."""
+    """add_file raises when all tables already exist."""
     project_root = fresh_staging.parent
     model_file = project_root / "legacy.py"
     model_file.write_text(_SQLMODEL_ORDERS)
@@ -836,10 +834,9 @@ def test_add_file_duplicate_returns_error(fresh_staging: Path) -> None:
     add_file("legacy.py")
     commit_changes()
 
-    # Try to add the same file again — should fail gracefully
-    result = add_file("legacy.py")
-    assert "Error" in result
-    assert "already exist" in result
+    # Try to add the same file again — should raise
+    with pytest.raises((ValueError, Exception), match="already exist"):
+        add_file("legacy.py")
 
 
 # ---------------------------------------------------------------------------
@@ -989,29 +986,28 @@ def test_modify_column_remove_foreign_key() -> None:
 
 
 def test_modify_column_fk_nonexistent_table_returns_error() -> None:
-    """modify_column with FK pointing at a missing table must return Error."""
+    """modify_column with FK pointing at a missing table must raise."""
     add_table("posts")
     add_column("posts", "author_id", "uuid")
-    msg = modify_column("posts", "author_id", foreign_key="ghost.id")
-    assert msg.startswith("Error:")
-    assert "ghost" in msg
+    with pytest.raises(ValueError, match="ghost"):
+        modify_column("posts", "author_id", foreign_key="ghost.id")
 
 
 def test_modify_column_fk_nonexistent_column_returns_error() -> None:
-    """modify_column with FK pointing at a missing column must return Error."""
+    """modify_column with FK pointing at a missing column must raise."""
     add_table("users")
     add_table("posts")
     add_column("posts", "author_id", "uuid")
-    msg = modify_column("posts", "author_id", foreign_key="users.nonexistent")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError):
+        modify_column("posts", "author_id", foreign_key="users.nonexistent")
 
 
 def test_modify_column_fk_invalid_format_returns_error() -> None:
-    """modify_column with a malformed FK string must return Error."""
+    """modify_column with a malformed FK string must raise."""
     add_table("posts")
     add_column("posts", "author_id", "uuid")
-    msg = modify_column("posts", "author_id", foreign_key="no_dot_here")
-    assert msg.startswith("Error:")
+    with pytest.raises(ValueError, match="no_dot_here"):
+        modify_column("posts", "author_id", foreign_key="no_dot_here")
 
 
 def test_modify_column_replace_existing_foreign_key() -> None:

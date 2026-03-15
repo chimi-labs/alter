@@ -24,6 +24,7 @@ from alter.parsers.base import (
     _node_to_name,
     _node_to_type_str,
     _parse_enum_class,
+    deduplicate_relations,
     deduplicate_tables,
     extract_imports,
     iter_py_files,
@@ -195,6 +196,8 @@ class SQLAlchemyParser(BaseParser):
                 schema.enums.append(enum_def)
 
         schema.tables = deduplicate_tables(schema.tables, all_warnings)
+        table_names = {t.name for t in schema.tables}
+        schema.relations = deduplicate_relations(schema.relations, table_names, all_warnings)
         return ParseResult(schema=schema, warnings=all_warnings, skipped_files=skipped)
 
     # ------------------------------------------------------------------

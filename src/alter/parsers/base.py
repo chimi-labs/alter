@@ -510,6 +510,50 @@ def deduplicate_tables(
     return result
 
 
+def deduplicate_relations(
+    relations: list[Relation],
+    table_names: set[str],
+    warnings: list[str],
+) -> list[Relation]:
+    """Return *relations* with duplicates and orphans removed.
+
+    Two passes are performed:
+
+    1. **Deduplication** — relations with the same ``name`` are collapsed to
+       the first occurrence, mirroring the behaviour of
+       :func:`deduplicate_tables`.  A warning is recorded for each dropped
+       duplicate.
+
+    2. **Orphan pruning** — relations whose ``from_table`` is not in
+       *table_names* (the post-dedup table set) are silently removed.  This
+       guards against stale relation entries left over when the table they
+       belong to was itself deduplicated under a different relation name.
+
+    Args:
+        relations: The full, possibly-duplicated relation list from all parsed
+                   files.
+        table_names: The set of table names that survived :func:`deduplicate_tables`.
+        warnings: A mutable list to which warning strings are appended.
+
+    Returns:
+        A clean relation list with no duplicate names and no orphaned entries.
+    """
+    seen: dict[str, Relation] = {}
+    result: list[Relation] = []
+    for rel in relations:
+        if rel.name not in seen:
+            seen[rel.name] = rel
+            result.append(rel)
+        else:
+            warnings.append(
+                f"Duplicate relation '{rel.name}' found in more than one file. "
+                "Keeping the first definition."
+            )
+    # Prune orphaned relations (from_table no longer in the schema)
+    result = [r for r in result if r.from_table in table_names]
+    return result
+
+
 def get_parser(orm: str, project_root: Path | None = None) -> BaseParser:
     """Return the correct parser backend for the given ORM string.
 

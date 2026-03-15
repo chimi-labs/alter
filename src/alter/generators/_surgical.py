@@ -562,6 +562,19 @@ def _class_needs_update(class_source: str, schema_field_lines: list[str]) -> boo
         else:
             return True  # genuinely new column
 
+    # Reverse check: if any Field()-style column in the file is NOT in the
+    # schema, the class needs updating (that column was deleted from the schema).
+    # We intentionally do NOT check bare annotations here — those may be
+    # hand-written non-ORM helper attributes and should never be auto-deleted.
+    schema_col_names = {
+        c
+        for line in schema_field_lines
+        if (c := _col_name_from_generated(line)) is not None
+    }
+    for col_name, _, _ in stmts:
+        if col_name not in schema_col_names:
+            return True
+
     return False
 
 
@@ -636,19 +649,26 @@ def _surgical_patch_class(
                     result.append(indent_str + new_line + "\n")
                 else:
                     # Bare field is equivalent or not in schema — keep verbatim.
+                    # We never auto-delete bare annotations: they may be non-ORM
+                    # helper attributes, not managed schema columns.
                     for ln in src_lines[i:end]:
                         result.append(ln)
+                # Bare branch always produces output — update insertion marker.
+                last_field_result_idx = len(result) - 1
             else:
                 if col_name in schema_map and not _field_kwargs_equal(existing_text, schema_map[col_name]):
                     # Rebuild with original kwarg order / multi-line style / LHS preserved
                     rebuilt = _rebuild_field_line(existing_text, schema_map[col_name])
                     result.append(rebuilt.rstrip() + "\n")
-                else:
+                    last_field_result_idx = len(result) - 1
+                elif col_name in schema_map:
                     # Keep verbatim (unchanged field — preserves kwarg order and formatting)
                     for ln in src_lines[i:end]:
                         result.append(ln)
-
-            last_field_result_idx = len(result) - 1
+                    last_field_result_idx = len(result) - 1
+                # else: col_name not in schema_map → column deleted from schema;
+                # omit from output.  Do NOT update last_field_result_idx so that
+                # any new columns are still inserted after the last kept field.
             i = end
         else:
             result.append(src_lines[i])
