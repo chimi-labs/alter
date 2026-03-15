@@ -489,7 +489,17 @@ alter init    # scan your ORM models → create schema.alter
 
 The MCP server requires `schema.alter` to exist before it can start.
 
-**Step 2 — Register the server in your editor.**
+**Step 2 — Ensure `mcp>=1.2.0` is installed.**
+
+`alter mcp` requires `mcp>=1.2.0` (the `FastMCP` API used internally was added in that release). If you see an error on startup, upgrade:
+
+```bash
+pip install 'mcp>=1.2.0'
+# or
+uv add 'mcp>=1.2.0'
+```
+
+**Step 3 — Register the server in your editor.**
 
 Most editors use the same JSON config. Add this to your MCP settings file:
 
@@ -521,7 +531,7 @@ claude mcp add alter -- uv run --directory /path/to/project alter mcp
 > **Why `uv run`?** It ensures the command runs inside your project's virtual environment,
 > picking up the correct `alterdb` version and dependencies — no manual `source .venv/bin/activate` needed.
 
-**Step 3 — Restart your editor** (or open a new session) so the MCP server connects. Verify by asking:
+**Step 4 — Restart your editor** (or open a new session) so the MCP server connects. Verify by asking:
 
 > _"What tools do you have available from alter?"_
 
