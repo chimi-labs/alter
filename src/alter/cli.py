@@ -653,11 +653,20 @@ def import_cmd(source: str, alter_file: str | None, fmt: str | None) -> None:
         else:
             from alter.importers.sql import import_sql
             from alter.schema import AlterSchema
+            from alter.generators.base import _default_model_path
             current_schema = AlterSchema.load(path)
+            # Use _default_model_path rather than metadata.sqlmodel_module so
+            # that imported tables land in the same file as existing tables.
+            # metadata.sqlmodel_module defaults to "app/models.py" on empty
+            # projects, which would create a phantom app/ directory even when
+            # the project has no such structure.  _default_model_path picks the
+            # most common directory among existing tables first, then checks
+            # whether app/ actually exists on disk before falling back to it,
+            # and ultimately defaults to "models.py" at the project root.
             result = import_sql(
                 src_path.read_text(),
                 orm=current_schema.orm,
-                file_path=current_schema.metadata.sqlmodel_module,
+                file_path=_default_model_path(current_schema, path.parent),
             )
             imported = result.schema
             import_warnings = result.warnings

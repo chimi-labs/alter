@@ -254,12 +254,23 @@ async function runElkLayout() {
   const graph = {
     id: 'root',
     layoutOptions: {
+      // DOWN gives a top-to-bottom ERD hierarchy: root tables (no FKs) sit at
+      // the top, tables that reference them cascade downward.  This produces
+      // far fewer diagonal edge crossings than RIGHT for typical multi-FK schemas.
       'elk.algorithm':                              'layered',
-      'elk.direction':                              'RIGHT',
-      'elk.spacing.nodeNode':                       '60',
-      'elk.layered.spacing.edgeNodeBetweenLayers':  '80',
-      'elk.padding':                                '[top=80,left=80,bottom=80,right=80]',
+      'elk.direction':                              'DOWN',
+      // Generous node-to-node gap so cards never feel cramped.
+      'elk.spacing.nodeNode':                       '120',
+      // Vertical space between consecutive layers (parent row → child row).
+      'elk.layered.spacing.edgeNodeBetweenLayers':  '130',
+      // Outer canvas padding so no card hugs the edge.
+      'elk.padding':                                '[top=100,left=100,bottom=100,right=100]',
+      // Reorder nodes within each layer to minimise edge crossings.
       'elk.layered.crossingMinimization.strategy':  'LAYER_SWEEP',
+      // Align nodes vertically within a layer for a cleaner grid feel.
+      'elk.layered.nodePlacement.strategy':         'BRANDES_KOEPF',
+      // Break FK cycles (e.g. self-referential or mutual FKs) deterministically.
+      'elk.layered.cycleBreaking.strategy':         'GREEDY',
     },
     children: tables.map(t => ({ id: t.name, width: CARD_W, height: getCardHeight(t) })),
     edges: (relations ?? [])

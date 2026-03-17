@@ -29,6 +29,9 @@ Action Tools (may write to disk or execute)
 Import / Export Tools
     import_schema, export_schema, diff_markdown, introspect_db
 
+Data Tools (read-only, requires live database connection)
+    query_db, describe_table_data, explain_query
+
 Resources
     alter://schema, alter://proposed, alter://models,
     alter://diff, alter://migration
@@ -95,16 +98,29 @@ class _LazyMCP:
         # detected: result = <class 'str'>" and crash the server on startup.
         # Opt out by defaulting to False (tools return text content as before).
         import inspect as _inspect
+        import warnings as _warnings
         _structured_output_supported = (
             "structured_output" in _inspect.signature(real_mcp.tool).parameters
         )
-        for fn, kwargs in self._pending_tools:
-            kw = dict(kwargs)
-            if _structured_output_supported:
-                kw.setdefault("structured_output", False)
-            real_mcp.tool(**kw)(fn)
-        for fn, uri, kwargs in self._pending_resources:
-            real_mcp.resource(uri, **kwargs)(fn)
+        # _UNSET = object() is intentionally used as the default for params
+        # where None is a meaningful "clear this field" value (e.g. default,
+        # max_length, foreign_key in modify_column).  Pydantic cannot serialize
+        # object() to JSON when building the tool schema, which causes a noisy
+        # PydanticJsonSchemaWarning on startup.  The warning is harmless — the
+        # sentinel works correctly at call time — so we suppress it here, scoped
+        # only to the tool registration calls.
+        with _warnings.catch_warnings():
+            _warnings.filterwarnings(
+                "ignore",
+                message="Default value.*is not JSON serializable",
+            )
+            for fn, kwargs in self._pending_tools:
+                kw = dict(kwargs)
+                if _structured_output_supported:
+                    kw.setdefault("structured_output", False)
+                real_mcp.tool(**kw)(fn)
+            for fn, uri, kwargs in self._pending_resources:
+                real_mcp.resource(uri, **kwargs)(fn)
 
     def run(self, **kwargs: Any) -> None:
         if self._real is None:
@@ -1102,8 +1118,18 @@ def apply_to_code(preview: bool = False) -> str:
 
     Args:
         preview: If True, return a unified diff without writing any files.
+
+    Note: Pending (uncommitted) changes are NOT applied. Call commit_changes()
+    first to persist your proposed schema, then call apply_to_code().
     """
     staging = _get_staging()
+    if staging.has_pending():
+        return (
+            "There are uncommitted schema changes. Call commit_changes() first "
+            "to save them to the .alter file, then call apply_to_code(). "
+            "Running apply_to_code() now would apply the last committed state "
+            "and silently ignore your pending changes."
+        )
     project_root = _get_path().parent
     try:
         return _apply_to_code_impl(staging, project_root, preview=preview)
@@ -1282,6 +1308,92 @@ def introspect_db(
 
     staging.propose(apply)
     return f"Introspected {len(imported.tables)} tables from database."
+
+
+# ---------------------------------------------------------------------------
+# Data Tools (read-only, requires live database connection)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def query_db(
+    sql: str,
+    row_limit: int = 100,
+    output_format: str = "table",
+    connection_string: str | None = None,
+) -> str:
+    """Execute a read-only SQL query against the database and return results.
+
+    Use this to answer questions about the actual data in the database.
+    The query runs in a read-only transaction — INSERT/UPDATE/DELETE are blocked.
+
+    Tips for writing queries:
+    - Use read_schema first to understand the table structure and relationships
+    - The schema includes foreign key relationships you can JOIN on
+    - Results are limited to row_limit rows by default
+
+    Args:
+        sql: A SELECT query to execute.
+        row_limit: Maximum rows to return (default 100, max 1000).
+        output_format: Output format — "table" (default), "json", or "csv".
+        connection_string: A libpq connection string or URL.  Defaults to the
+            ``DATABASE_URL`` environment variable if not provided.
+    """
+    from alter.query import execute_query, format_results  # noqa: PLC0415
+
+    row_limit = min(max(row_limit, 1), 1000)
+    result = execute_query(sql, connection_string=connection_string, row_limit=row_limit)
+    return format_results(result, output_format=output_format)
+
+
+@mcp.tool()
+def describe_table_data(
+    table_name: str,
+    sample_rows: int = 5,
+    schema_name: str = "public",
+    connection_string: str | None = None,
+) -> str:
+    """Show row count, column details, relationships, and sample data from a table.
+
+    Gets all information directly from the live database (not the .alter file).
+    Useful before writing queries to understand what a table contains.
+
+    Args:
+        table_name: Name of the table to describe.
+        sample_rows: Number of sample rows to include (default 5, max 20).
+        schema_name: PostgreSQL schema name (default "public").
+        connection_string: A libpq connection string or URL.  Defaults to the
+            ``DATABASE_URL`` environment variable if not provided.
+    """
+    from alter.query import describe_table_data as _describe  # noqa: PLC0415
+
+    sample_rows = min(max(sample_rows, 1), 20)
+    return _describe(
+        table_name,
+        schema_name=schema_name,
+        connection_string=connection_string,
+        sample_rows=sample_rows,
+    )
+
+
+@mcp.tool()
+def explain_query(
+    sql: str,
+    connection_string: str | None = None,
+) -> str:
+    """Show the PostgreSQL query execution plan for a SQL query.
+
+    Useful for understanding query performance or debugging slow queries.
+    Does not actually execute the query (uses EXPLAIN without ANALYZE).
+
+    Args:
+        sql: The SQL query to explain.
+        connection_string: A libpq connection string or URL.  Defaults to the
+            ``DATABASE_URL`` environment variable if not provided.
+    """
+    from alter.query import get_query_plan  # noqa: PLC0415
+
+    return get_query_plan(sql, connection_string=connection_string)
 
 
 # ---------------------------------------------------------------------------

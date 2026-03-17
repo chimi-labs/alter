@@ -114,11 +114,11 @@ def _apply_modify_column(
         setattr(col, k, v)
 
 
-_GRID_COLS = 3
-_GRID_COL_W = 290
-_GRID_ROW_H = 310
-_GRID_ORIGIN_X = 80
-_GRID_ORIGIN_Y = 80
+_GRID_COLS    = 3    # columns per row
+_GRID_COL_W   = 400  # horizontal step (card width ~248 + 152px gap)
+_GRID_ROW_H   = 420  # vertical step   (tallest card ~390 + 30px gap)
+_GRID_ORIGIN_X = 100
+_GRID_ORIGIN_Y = 100
 
 # How long after a server-side file write to suppress watchfiles events (seconds).
 _SELF_WRITE_SUPPRESS_S = 0.5
@@ -171,17 +171,38 @@ def _migration_sql(staging: StagingManager) -> str:
         return ""
 
     prop = staging.proposed_schema
+    curr = staging.current_schema
     lines: list[str] = []
 
     from alter.types import alter_to_sql
     from alter.exporters.sql import _column_to_sql, _table_to_sql
     prop_tables = {t.name: t for t in prop.tables}
+    curr_tables = {t.name: t for t in curr.tables}
 
     # Tables being dropped in this migration batch.  DROP TABLE implicitly
     # removes all columns, indexes, and constraints on the table, so any
     # ALTER TABLE / DROP INDEX statements targeting a dropped table are not
     # only redundant but would raise a runtime error.
     dropped_tables: set[str] = {ch.table for ch in changes if ch.type == "drop_table" and ch.table}
+
+    # Tables being created in this migration batch.  _table_to_sql() already
+    # emits inline FOREIGN KEY constraints for new tables (via rel_index), so
+    # any add_relation change whose source table is also being created would
+    # produce a duplicate constraint and fail at execution time.
+    added_tables: set[str] = {ch.table for ch in changes if ch.type == "add_table" and ch.table}
+
+    # For rename-detection warnings: map table → [(col_name, alter_type)] for
+    # every column being added in this batch.  Used below to warn when a
+    # drop_column + same-type add_column on the same table looks like a rename
+    # (which would cause silent data loss via ADD+DROP instead of RENAME COLUMN).
+    added_cols_by_table: dict[str, list[tuple[str, str]]] = {}
+    for ch in changes:
+        if ch.type == "add_column" and ch.table and ch.column:
+            new_tbl = prop_tables.get(ch.table)
+            if new_tbl:
+                new_col = next((c for c in new_tbl.columns if c.name == ch.column), None)
+                if new_col:
+                    added_cols_by_table.setdefault(ch.table, []).append((ch.column, new_col.type))
 
     for ch in changes:
         if ch.type == "add_table":
@@ -206,6 +227,37 @@ def _migration_sql(staging: StagingManager) -> str:
 
         elif ch.type == "drop_column":
             if ch.table not in dropped_tables:
+                # Warn when a same-type column is being added on the same table
+                # in the same batch — this is the fingerprint of a column rename
+                # done via rename_entity(), which the diff engine cannot detect
+                # natively and therefore emits as ADD+DROP.  Running the ADD+DROP
+                # as-is would destroy all data in the original column.
+                if ch.column and ch.table in added_cols_by_table:
+                    old_tbl = curr_tables.get(ch.table)
+                    old_col = next(
+                        (c for c in old_tbl.columns if c.name == ch.column), None
+                    ) if old_tbl else None
+                    if old_col:
+                        matches = [
+                            name for name, typ in added_cols_by_table[ch.table]
+                            if typ == old_col.type
+                        ]
+                        if matches:
+                            if len(matches) == 1:
+                                lines.append(
+                                    f"-- WARNING: '{ch.table}.{ch.column}' is being dropped while"
+                                    f" '{matches[0]}' (same type) is being added.\n"
+                                    f"-- If this is a rename, replace the ADD+DROP below with:\n"
+                                    f"--   ALTER TABLE {ch.table} RENAME COLUMN {ch.column} TO {matches[0]};\n"
+                                )
+                            else:
+                                candidates = ", ".join(matches)
+                                lines.append(
+                                    f"-- WARNING: '{ch.table}.{ch.column}' is being dropped while"
+                                    f" same-type column(s) [{candidates}] are being added.\n"
+                                    f"-- If any of these is a rename, use ALTER TABLE {ch.table}"
+                                    f" RENAME COLUMN {ch.column} TO <new_name>; instead to avoid data loss.\n"
+                                )
                 lines.append(f"ALTER TABLE {ch.table} DROP COLUMN {ch.column};\n")
 
         elif ch.type == "modify_column":
@@ -250,6 +302,11 @@ def _migration_sql(staging: StagingManager) -> str:
                                 )
 
         elif ch.type == "add_relation":
+            # Skip: _table_to_sql() already emits inline FK constraints for
+            # newly created tables.  Emitting ALTER TABLE ADD CONSTRAINT here
+            # too would duplicate the constraint and fail at execution time.
+            if ch.table in added_tables:
+                continue
             to_str = ch.details.get("to", "")
             if ch.table and ch.column and "." in to_str:
                 to_table, to_column = to_str.split(".", 1)
@@ -720,6 +777,7 @@ class _Handler(BaseHTTPRequestHandler):
             # watcher doesn't re-broadcast it as an external change.
             self.server._last_self_write = time.monotonic()
             self.server.staging.commit()
+            self.server._file_created.set()  # wake the watcher if file was just created
             self._send_schema_response()
         except Exception as exc:
             self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
@@ -795,13 +853,28 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     def _handle_apply_to_code(self, body: bytes) -> None:
-        """Write committed schema to ORM model files (alter apply)."""
+        """Write schema to ORM model files (alter apply).
+
+        Auto-commits any pending proposed changes before applying so that what
+        the user sees on the canvas is always what lands in code — even if they
+        haven't explicitly clicked the Commit button first.
+        """
         try:
             from alter.mcp_server import _apply_to_code_impl
             preview = False
             if body:
                 data = json.loads(body)
                 preview = data.get("preview", False)
+            # Auto-commit pending changes so the canvas "Apply to Code" button
+            # reflects the current canvas state, not the last explicit commit.
+            # Without this, a column deleted on canvas but not yet committed
+            # would be ignored: _apply_to_code_impl reads current_schema, which
+            # only updates on commit, so the deletion would never reach the code
+            # generator and the column would remain in the Python file.
+            if not preview and self.server.staging.has_pending():
+                self.server._last_self_write = time.monotonic()
+                self.server.staging.commit()
+                self.server._file_created.set()
             result = _apply_to_code_impl(
                 self.server.staging, self.server._path.parent, preview=preview
             )
@@ -915,6 +988,13 @@ class CanvasServer(_ThreadingHTTPServer):
         # suppress spurious watchfiles events caused by our own commits.
         self._last_self_write: float = 0.0
 
+        # Signalled when the .alter file is first written (commit on a fresh
+        # project).  The file-watcher thread waits on this instead of polling
+        # when the file doesn't exist yet.
+        self._file_created = threading.Event()
+        if alter_file_path.exists():
+            self._file_created.set()
+
         super().__init__(("127.0.0.1", port), _Handler)
 
         # Start the background file watcher AFTER the server is bound.
@@ -961,6 +1041,11 @@ class CanvasServer(_ThreadingHTTPServer):
                 from watchfiles import watch as wf_watch
             except ImportError:
                 return  # watchfiles not installed — live-sync disabled
+
+            # On a fresh project the .alter file doesn't exist yet — watchfiles
+            # raises FileNotFoundError if the path is missing.  Block until the
+            # first commit creates the file (signalled via _file_created event).
+            self._file_created.wait()
 
             for _changes in wf_watch(str(path), debounce=200):
                 # Skip if the change was caused by the server writing the file.

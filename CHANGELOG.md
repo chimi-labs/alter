@@ -2,6 +2,112 @@
 
 All notable changes to Alter are documented here.
 
+## [0.2.4] — 2026-03-17
+
+### Bug Fixes
+
+#### Duplicate FK constraints in migration SQL (Bug C)
+
+When a new table with a foreign key column was added on the canvas, `_migration_sql()`
+emitted the FK constraint twice: once inline inside the `CREATE TABLE` statement (via
+`_table_to_sql()`), and a second time as a standalone `ALTER TABLE … ADD CONSTRAINT`
+from the `add_relation` change handler.
+
+Fixed by collecting the names of all tables being created in the current diff into an
+`added_tables` set. The `add_relation` handler now skips emitting a separate FK
+statement for any table in that set, since the `CREATE TABLE` block already contains
+the inline reference.
+
+#### `alter canvas` crashes on fresh project with no `schema.alter` file (Bug D)
+
+Running `alter canvas` in a project that had never been initialised (no `schema.alter`
+file yet) caused `watchfiles.watch()` to raise an error because the target path did not
+exist. The traceback surfaced as an unhandled exception in the file-watcher thread,
+producing a noisy and confusing error message in the terminal.
+
+The file watcher thread now blocks on a `threading.Event` (`_file_created`) instead of
+starting immediately. The event is signalled the first time `schema.alter` is written
+(on the first Commit or Apply to Code), at which point `watchfiles.watch()` is called
+on a path that is guaranteed to exist. Before the file exists, the canvas still loads
+and works fully — changes are simply held in memory until the first commit.
+
+#### `apply_to_code` silently using stale committed schema (Bug E)
+
+When the canvas "Apply to Code" button was clicked with uncommitted staged changes
+present, `_apply_to_code_impl` read `staging.current_schema` (the last committed
+state) rather than `staging.proposed_schema` (the in-memory working state). Staged
+changes were silently discarded from the code write while they remained visible on the
+canvas, causing the model files to diverge from what the canvas showed.
+
+Two-part fix:
+
+1. **Canvas handler auto-commit** — `_handle_apply_to_code` in `canvas/server.py` now
+   calls `staging.commit()` before delegating to `_apply_to_code_impl` whenever there
+   are pending staged changes. This ensures the code write always reflects the current
+   canvas state.
+
+2. **MCP guard** — `apply_to_code()` in `mcp_server.py` now returns an early error
+   message if `staging.has_pending()` is true, asking the caller to invoke
+   `commit_changes()` first. This prevents the MCP path from silently applying a stale
+   snapshot while an in-progress edit session is underway.
+
+#### `alter import` creates spurious `app/models.py` on new projects (Bug F)
+
+`alter import schema.sql` was routing imported tables to
+`metadata.sqlmodel_module`, which defaults to `"app/models.py"`. On projects that had
+no `app/` directory, this caused `alter apply` to create `app/models.py` as a new
+file even though the project had no such layout.
+
+The import command now calls `_default_model_path(current_schema, project_root)` to
+infer the correct output file, applying the same priority logic used everywhere else
+in the codebase: most-common directory across existing tracked tables → `app/` if it
+exists → `models.py` in the project root. No phantom files are created.
+
+#### MCP server emits `PydanticJsonSchemaWarning` on startup (Bug G)
+
+The `_UNSET = object()` sentinel — used as the default for `default`, `max_length`,
+and `foreign_key` parameters in `modify_column` so that callers can pass explicit
+`None` to clear a field — caused Pydantic to emit a `PydanticJsonSchemaWarning` when
+building the JSON schema for the MCP tool at server startup. The warning was harmless
+(the sentinel works correctly at call time) but noisy.
+
+Fixed by wrapping the tool-registration loop in `_LazyMCP._init_real` with a
+`warnings.catch_warnings()` context manager that suppresses
+`"Default value.*is not JSON serializable"` messages. The suppression is scoped
+entirely to the registration calls; all other Pydantic warnings remain unaffected.
+
+### Improvements
+
+#### Column rename detection in migration SQL
+
+Alter's diff engine is name-based and cannot distinguish a column rename from a
+drop + add of the same type. When `_migration_sql()` detects this pattern — a
+`drop_column` and an `add_column` on the same table whose dropped column and added
+column share the same type — the generated SQL now includes a warning comment:
+
+```sql
+-- WARNING: 'orders.note' is being dropped while 'notes' (same type) is being added.
+-- If this is a rename, replace the ADD+DROP below with:
+--   ALTER TABLE orders RENAME COLUMN note TO notes;
+```
+
+This makes it easy to spot a likely rename and swap the destructive ADD+DROP for a
+safe `RENAME COLUMN` before executing the migration.
+
+#### Improved initial canvas layout
+
+The ELK graph layout used for the first-open auto-arrange now produces cleaner ERD
+diagrams. Changes:
+
+- Direction changed from `RIGHT` to `DOWN` — tables flow top-to-bottom, which reads
+  more naturally as an entity-relationship diagram.
+- Node spacing increased from 60 px to 120 px, edge-to-node layer spacing from 80 px
+  to 130 px — tables no longer overlap on medium-sized schemas.
+- `BRANDES_KOEPF` node placement and `GREEDY` cycle-breaking strategies added for
+  more compact, symmetrical layouts.
+- Grid fallback spacing increased (`290 → 400 px` column width, `310 → 420 px` row
+  height) for schemas that fall back to the simpler grid arrangement.
+
 ## [0.2.3] — 2026-03-15
 
 ### Bug Fixes

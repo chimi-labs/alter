@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/chimi-labs/alter/main/docs/alter_logo.png" alt="Alter" width="320" />
+</p>
+
 # Alter
 
 > Comprehension first, design second.
@@ -49,7 +53,7 @@ uv add alterdb
 > This keeps Alter's dependencies completely separate from your project's virtual environment while
 > making the `alter` command available on your `PATH`.
 
-> **Live database introspection** (MCP `introspect_db` tool): requires `psycopg2-binary`, install with `pip install alterdb[db]`.
+> **Live database features** (MCP `introspect_db`, `query_db`, `describe_table_data`, `explain_query` tools): requires `psycopg2-binary`, install with `pip install alterdb[db]`.
 
 ## Quick Start
 
@@ -129,6 +133,10 @@ You add a table or modify a column on the canvas, then click **Commit** (or use 
 alter apply --preview   # see exactly what will change (unified diff)
 alter apply             # write the changes to your model files
 ```
+
+> **Apply to Code auto-commits:** clicking **Apply to Code** in the canvas automatically commits
+> any pending staged changes to `schema.alter` before writing to your model files — so you never
+> accidentally apply a stale snapshot.
 
 `alter apply` is surgical — it only touches what the schema says has changed:
 
@@ -213,6 +221,12 @@ Alter generates the SQL — you run it with whatever migration tool you already 
 
 The **Migrations tab** in the canvas shows the pending SQL at any time. The `preview_migration`
 MCP tool returns the same SQL to AI assistants. Copy it into your migration manager of choice.
+
+> **Column rename detection:** Alter's diff engine is name-based and cannot distinguish a column
+> rename from a drop + add. When it detects a `DROP COLUMN` paired with an `ADD COLUMN` of the
+> same type on the same table, the generated SQL includes a comment pointing out the potential
+> rename and showing the equivalent `ALTER TABLE … RENAME COLUMN` statement. Review this comment
+> before running the migration to avoid accidental data loss.
 
 ### With Alembic (one-time setup)
 
@@ -544,8 +558,14 @@ claude mcp add alter -- uv run --directory /path/to/project alter mcp
 - **Preview migration SQL** — see the DDL that needs to run for pending changes
 - **Undo/redo** any staged change
 - **Commit** approved changes to `schema.alter`
+- **Apply to code** — write committed schema changes to your ORM model files
 - **Export** as SQL, Mermaid, or JSON
 - **Validate** the schema for errors
+- **Query live data** — run read-only SQL against a real database and get results back (see below)
+
+> **`apply_to_code` requires a prior commit:** if there are uncommitted staged changes when
+> `apply_to_code()` is called, the tool returns a message asking you to call `commit_changes()`
+> first. This prevents silently applying a stale snapshot while discarding your pending edits.
 
 ### Example prompts
 
@@ -576,6 +596,131 @@ Once connected, just talk to your assistant:
 
 The assistant stages changes, shows you a diff, and only commits to `schema.alter` with your
 approval — nothing is written to your model files until you also run `alter apply`.
+
+### Querying live data
+
+Alter's MCP server can also run read-only SQL queries against a live PostgreSQL database,
+so your AI assistant can answer questions about actual data — not just schema structure.
+
+**Setup**
+
+**1 — Install the database extra** (if you haven't already):
+
+```bash
+pip install alterdb[db]
+# or
+uv add alterdb[db]
+```
+
+This adds `psycopg2-binary`, which is required for all live database tools.
+
+**2 — Set the `DATABASE_URL` environment variable** before starting your editor or MCP session:
+
+```bash
+export DATABASE_URL="postgresql://user:password@localhost:5432/mydb"
+```
+
+Or add it to your editor's MCP config so it's always available:
+
+```json
+{
+  "mcpServers": {
+    "alter": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/project", "alter", "mcp"],
+      "env": {
+        "DATABASE_URL": "postgresql://user:password@localhost:5432/mydb"
+      }
+    }
+  }
+}
+```
+
+That's it. No other configuration needed — the tools pick up `DATABASE_URL` automatically.
+
+**The three data tools**
+
+| Tool | What it does |
+|------|-------------|
+| `query_db` | Execute a SELECT query, return results as a table, JSON, or CSV |
+| `describe_table_data` | Show row count, column types, relationships, and sample rows for a table |
+| `explain_query` | Show PostgreSQL's query execution plan (without running the query) |
+
+All queries run in a **read-only transaction** — INSERT, UPDATE, DELETE, and DDL are
+blocked at the database level. Results are capped at 1,000 rows (default: 100).
+
+**Example prompts**
+
+_"How many users signed up in the last 30 days?"_
+
+The assistant calls `read_schema` to see the `users` table has a `created_at` column,
+then calls `query_db`:
+```
+| count |
+| 847   |
+
+1 row in 4ms
+```
+→ _"847 users signed up in the last 30 days."_
+
+---
+
+_"Which plan do most of our paying customers use?"_
+
+```
+| plan    | count |
+| pro     | 1,204 |
+| starter | 891   |
+| team    | 342   |
+
+3 rows in 12ms
+```
+
+---
+
+_"Tell me about the orders table before I write a query against it"_
+
+The assistant calls `describe_table_data("orders")`:
+```
+Table: public.orders (24,871 rows)
+
+Columns:
+  id:          uuid        NOT NULL DEFAULT gen_random_uuid()
+  user_id:     uuid        NOT NULL
+  status:      varchar     NOT NULL
+  total_cents: integer     NOT NULL
+  created_at:  timestamptz NOT NULL DEFAULT now()
+
+References (outgoing):
+  orders.user_id → users.id (CASCADE)
+
+Referenced by (incoming):
+  order_items.order_id → orders.id (CASCADE)
+
+Sample data (5 rows):
+id     | user_id | status    | total_cents | created_at
+-------+---------+-----------+-------------+-----------
+a1b2…  | x9y0…   | completed | 4999        | 2024-03-01…
+…
+```
+
+---
+
+_"Why is my query slow? EXPLAIN this: SELECT * FROM orders JOIN users ON orders.user_id = users.id WHERE orders.status = 'pending'"_
+
+The assistant calls `explain_query` and returns the plan — no rows are fetched, no data
+is affected.
+
+```
+Hash Join  (cost=18.50..1842.30 rows=312 width=156)
+  Hash Cond: (orders.user_id = users.id)
+  ->  Seq Scan on orders  (cost=0.00..1810.71 rows=312 ...)
+        Filter: ((status)::text = 'pending'::text)
+  ->  Hash  (cost=14.70..14.70 rows=304 ...)
+        ->  Seq Scan on users  (cost=0.00..14.70 rows=304 ...)
+```
+
+→ _"The sequential scan on `orders` is the bottleneck — adding an index on `orders.status` would speed this up significantly."_
 
 ## Supported ORMs
 
